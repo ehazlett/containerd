@@ -11,10 +11,13 @@ import (
 	"syscall"
 
 	"github.com/containerd/containerd/api/services/containers"
+	eventsapi "github.com/containerd/containerd/api/services/events"
 	"github.com/containerd/containerd/api/services/execution"
-	taskapi "github.com/containerd/containerd/api/types/task"
+	"github.com/containerd/containerd/api/types/event"
+	tasktypes "github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/rootfs"
+	"github.com/gogo/protobuf/proto"
 	"github.com/opencontainers/image-spec/specs-go/v1"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -133,21 +136,29 @@ func (t *task) Status(ctx context.Context) (TaskStatus, error) {
 
 // Wait is a blocking call that will wait for the task to exit and return the exit status
 func (t *task) Wait(ctx context.Context) (uint32, error) {
-	events, err := t.client.TaskService().Events(ctx, &execution.EventsRequest{})
+	// TODO (ehazlett): add filtering for specific event
+	events, err := t.client.EventService().EventStream(ctx, &eventsapi.EventStreamRequest{})
 	if err != nil {
 		return UnknownExitStatus, err
 	}
-	<-t.pidSync
 	for {
-		e, err := events.Recv()
+		evt, err := events.Recv()
 		if err != nil {
 			return UnknownExitStatus, err
 		}
-		if e.Type != taskapi.Event_EXIT {
-			continue
-		}
-		if e.ID == t.containerID && e.Pid == t.pid {
-			return e.ExitStatus, nil
+		if evt.Event.TypeUrl == "types.containerd.io/containerd.v1.types.event.RuntimeEvent" {
+			e := &event.RuntimeEvent{}
+			if err := proto.Unmarshal(evt.Event.Value, e); err != nil {
+				return UnknownExitStatus, err
+			}
+
+			if e.Type != tasktypes.Event_EXIT {
+				continue
+			}
+
+			if e.ID == t.containerID && e.Pid == t.pid {
+				return e.ExitStatus, nil
+			}
 		}
 	}
 }

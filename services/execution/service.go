@@ -204,6 +204,10 @@ func (s *Service) Delete(ctx context.Context, r *api.DeleteRequest) (*api.Delete
 	if err != nil {
 		return nil, err
 	}
+	state, err := c.State(ctx)
+	if err != nil {
+		return nil, err
+	}
 	exit, err := runtime.Delete(ctx, c)
 	if err != nil {
 		return nil, err
@@ -211,6 +215,8 @@ func (s *Service) Delete(ctx context.Context, r *api.DeleteRequest) (*api.Delete
 
 	if err := s.emit(ctx, "/tasks/delete", event.TaskDelete{
 		ContainerID: r.ContainerID,
+		Pid:         state.Pid,
+		ExitStatus:  exit.Status,
 	}); err != nil {
 		return nil, err
 	}
