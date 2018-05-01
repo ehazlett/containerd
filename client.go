@@ -17,10 +17,14 @@
 package containerd
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"sync"
@@ -45,6 +49,7 @@ import (
 	"github.com/containerd/containerd/events"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/namespaces"
+	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/plugin"
 	"github.com/containerd/containerd/remotes"
 	"github.com/containerd/containerd/remotes/docker"
@@ -613,6 +618,84 @@ func (c *Client) Import(ctx context.Context, importer images.Importer, reader io
 		})
 	}
 	return images, nil
+}
+
+// InstallPackage installs a containerd package
+func (c *Client) InstallPackage(ctx context.Context, ref string, opts ...PackageOpt) error {
+	o := []RemoteOpt{
+		WithPullUnpack,
+		WithPullLabel("io.containerd.package", "true"),
+	}
+	img, err := c.Pull(ctx, ref, o...)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(PackageRootDir, 0755); err != nil {
+		return err
+	}
+
+	cs := img.ContentStore()
+	platform := platforms.Default()
+	manifest, err := images.Manifest(ctx, cs, img.Target(), platform)
+	if err != nil {
+		return err
+	}
+
+	for _, layer := range manifest.Layers {
+		ra, err := cs.ReaderAt(ctx, layer.Digest)
+		if err != nil {
+			return err
+		}
+		cr := content.NewReader(ra)
+		r, err := gzip.NewReader(cr)
+		if err != nil {
+			return err
+		}
+		if err := extract(r, PackageRootDir); err != nil {
+			return err
+		}
+		ra.Close()
+	}
+
+	return nil
+}
+
+func extract(r io.Reader, dest string) error {
+	tr := tar.NewReader(r)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		d := filepath.Join(dest, h.Name)
+		if h.FileInfo().IsDir() {
+			if err := os.MkdirAll(d, 0755); err != nil {
+				return err
+			}
+			continue
+		}
+
+		f, err := os.Create(d)
+		if err != nil {
+			return err
+		}
+
+		if _, err := io.Copy(f, tr); err != nil {
+			return err
+		}
+		f.Close()
+
+		if err := os.Chmod(d, h.FileInfo().Mode()); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 type exportOpts struct {

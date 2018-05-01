@@ -61,6 +61,8 @@ func WithServices(opts ...ServicesOpt) ClientOpt {
 	}
 }
 
+type PackageOpt func(*Client) error
+
 // RemoteOpt allows the caller to set distribution options for a remote
 type RemoteOpt func(*Client, *RemoteContext) error
 

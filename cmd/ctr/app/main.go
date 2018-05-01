@@ -26,6 +26,7 @@ import (
 	"github.com/containerd/containerd/cmd/ctr/commands/events"
 	"github.com/containerd/containerd/cmd/ctr/commands/images"
 	namespacesCmd "github.com/containerd/containerd/cmd/ctr/commands/namespaces"
+	"github.com/containerd/containerd/cmd/ctr/commands/packages"
 	"github.com/containerd/containerd/cmd/ctr/commands/plugins"
 	"github.com/containerd/containerd/cmd/ctr/commands/pprof"
 	"github.com/containerd/containerd/cmd/ctr/commands/run"
@@ -102,6 +103,7 @@ containerd CLI
 		run.Command,
 		snapshots.Command,
 		tasks.Command,
+		packages.Command,
 	}, extraCmds...)
 	app.Before = func(context *cli.Context) error {
 		if context.GlobalBool("debug") {
