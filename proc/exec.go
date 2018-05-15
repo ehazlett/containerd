@@ -28,8 +28,6 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/containerd/console"
 	"github.com/containerd/fifo"
 	runc "github.com/containerd/go-runc"
@@ -113,16 +111,6 @@ func (e *execProcess) resize(ws console.WinSize) error {
 	return e.console.Resize(ws)
 }
 
-func (e *execProcess) kill(ctx context.Context, sig uint32, _ bool) error {
-	pid := e.pid
-	if pid != 0 {
-		if err := unix.Kill(pid, syscall.Signal(sig)); err != nil {
-			return errors.Wrapf(checkKillError(err), "exec kill error")
-		}
-	}
-	return nil
-}
-
 func (e *execProcess) Stdin() io.Closer {
 	return e.stdin
 }
@@ -197,29 +185,4 @@ func (e *execProcess) start(ctx context.Context) (err error) {
 	}
 	e.pid = pid
 	return nil
-}
-
-func (e *execProcess) Status(ctx context.Context) (string, error) {
-	s, err := e.parent.Status(ctx)
-	if err != nil {
-		return "", err
-	}
-	// if the container as a whole is in the pausing/paused state, so are all
-	// other processes inside the container, use container state here
-	switch s {
-	case "paused", "pausing":
-		return s, nil
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	// if we don't have a pid then the exec process has just been created
-	if e.pid == 0 {
-		return "created", nil
-	}
-	// if we have a pid and it can be signaled, the process is running
-	if err := unix.Kill(e.pid, 0); err == nil {
-		return "running", nil
-	}
-	// else if we have a pid but it can nolonger be signaled, it has stopped
-	return "stopped", nil
 }
