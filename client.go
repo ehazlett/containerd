@@ -662,6 +662,8 @@ func (c *Client) InstallPackage(ctx context.Context, ref string, opts ...Package
 }
 
 func extract(r io.Reader, dest string) error {
+	//links := map[string]string{}
+
 	tr := tar.NewReader(r)
 	for {
 		h, err := tr.Next()
@@ -672,27 +674,37 @@ func extract(r io.Reader, dest string) error {
 			return err
 		}
 
-		d := filepath.Join(dest, h.Name)
-		if h.FileInfo().IsDir() {
-			if err := os.MkdirAll(d, 0755); err != nil {
+		target := filepath.Join(dest, h.Name)
+		switch h.Typeflag {
+		case tar.TypeDir:
+			if _, err := os.Stat(target); err != nil {
+				if !os.IsNotExist(err) {
+					return err
+				}
+				if err := os.MkdirAll(target, 0755); err != nil {
+					return err
+				}
+			}
+		case tar.TypeReg:
+			f, err := os.Create(target)
+			if err != nil {
 				return err
 			}
-			continue
+
+			if _, err := io.Copy(f, tr); err != nil {
+				return err
+			}
+			f.Close()
+			if err := os.Chmod(target, h.FileInfo().Mode()); err != nil {
+				return err
+			}
+		case tar.TypeSymlink:
+			linkBase := filepath.Dir(h.Name)
+			linkTarget := filepath.Join(dest, linkBase, h.Linkname)
+			fmt.Printf("linking %s -> %s\n", linkTarget, target)
+			defer os.Symlink(linkTarget, target)
 		}
 
-		f, err := os.Create(d)
-		if err != nil {
-			return err
-		}
-
-		if _, err := io.Copy(f, tr); err != nil {
-			return err
-		}
-		f.Close()
-
-		if err := os.Chmod(d, h.FileInfo().Mode()); err != nil {
-			return err
-		}
 	}
 
 	return nil
