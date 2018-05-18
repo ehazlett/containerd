@@ -78,7 +78,7 @@ var ContainerFlags = []cli.Flag{
 	},
 	cli.StringFlag{
 		Name:  "runtime",
-		Usage: "runtime name (io.containerd.runtime.v1.linux, io.containerd.runtime.v1.windows, io.containerd.runtime.v1.com.vmware.linux)",
+		Usage: "runtime name (io.containerd.runtime.v1.linux, io.containerd.runtime.v1.windows, io.containerd.runtime.v1.com.vmware.linux, io.containerd.runtime.v1.host)",
 		Value: fmt.Sprintf("io.containerd.runtime.v1.%s", runtime.GOOS),
 	},
 	cli.BoolFlag{
