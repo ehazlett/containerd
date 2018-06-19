@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package containerd.process.proc;
+
+import weak "gogoproto/gogo.proto";
+
+option go_package = "github.com/containerd/containerd/runtime/process/proctypes;proctypes";
+
+message ProcessOptions {
+	string runtime = 1;
+	string runtime_root = 2;
+}
+
+message CreateOptions {
+	string runtime = 1;
+	string runtime_root = 2;
+}
+
+message ProcessDetails {
+	uint32 process_id = 1;
+	string exec_id = 2;
+}
