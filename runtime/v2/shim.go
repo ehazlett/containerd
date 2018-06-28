@@ -96,9 +96,27 @@ type Shim struct {
 	events  *exchange.Exchange
 }
 
-func (s *Shim) kill() error {
-	if err := unix.Kill(s.shimPid, unix.SIGTERM); err != nil {
+func (s *Shim) kill(killDuration time.Duration) error {
+	dead := make(chan struct{})
+	if err := unix.Kill(s.shimPid, unix.SIGTERM); err != nil && err != unix.ESRCH {
 		return err
+	}
+	go func() {
+		for {
+			if err := unix.Kill(s.shimPid, 0); err == unix.ESRCH {
+				close(dead)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	select {
+	case <-time.After(killDuration):
+		unix.Kill(s.shimPid, unix.SIGKILL)
+		<-dead
+		return nil
+	case <-dead:
+		return nil
 	}
 }
 
@@ -116,7 +134,7 @@ func (s *Shim) Delete(ctx context.Context) (*runtime.Exit, error) {
 	if err != nil {
 		return nil, errdefs.FromGRPC(err)
 	}
-	if err := s.kill(); err != nil {
+	if err := s.kill(3 * time.Second); err != nil {
 		return nil, err
 	}
 	if err := s.bundle.Delete(); err != nil {
@@ -162,13 +180,107 @@ func (s *Shim) Create(ctx context.Context, opts runtime.CreateOpts) (Task, error
 }
 
 func (s *Shim) Pause(ctx context.Context) error {
-	if _, err := t.task.Pause(ctx, empty); err != nil {
+	if _, err := s.task.Pause(ctx, empty); err != nil {
 		return errdefs.FromGRPC(err)
 	}
 	s.events.Publish(ctx, runtime.TaskPausedEventTopic, &eventstypes.TaskPaused{
 		ContainerID: s.ID(),
 	})
 	return nil
+}
+
+func (s *Shim) Resume(ctx context.Context) error {
+	if _, err := s.task.Resume(ctx, empty); err != nil {
+		return errdefs.FromGRPC(err)
+	}
+	s.events.Publish(ctx, runtime.TaskResumedEventTopic, &eventstypes.TaskResumed{
+		ContainerID: s.ID(),
+	})
+	return nil
+}
+
+func (s *Shim) Start(ctx context.Context) error {
+	response, err := s.task.Start(ctx, &task.StartRequest{
+		ID: s.ID(),
+	})
+	if err != nil {
+		return errdefs.FromGRPC(err)
+	}
+	s.taskPid = int(response.Pid)
+	s.events.Publish(ctx, runtime.TaskStartEventTopic, &eventstypes.TaskStart{
+		ContainerID: s.ID(),
+		Pid:         uint32(s.taskPid),
+	})
+	return nil
+}
+
+func (s *Shim) Kill(ctx context.Context, signal uint32, all bool) error {
+	if _, err := s.task.Kill(ctx, &task.KillRequest{
+		ID:     s.ID(),
+		Signal: signal,
+		All:    all,
+	}); err != nil {
+		return errdefs.FromGRPC(err)
+	}
+	return nil
+}
+
+func (s *Shim) Exec(ctx context.Context, id string, opts runtime.ExecOpts) (runtime.Process, error) {
+
+}
+
+func (s *Shim) Pids(ctx context.Context) ([]runtime.ProcessInfo, error) {
+	resp, err := s.task.Pids(ctx, &task.PidsRequest{
+		ID: s.ID(),
+	})
+	if err != nil {
+		return nil, errdefs.FromGRPC(err)
+	}
+	var processList []runtime.ProcessInfo
+	for _, p := range resp.Processes {
+		processList = append(processList, runtime.ProcessInfo{
+			Pid:  p.Pid,
+			Info: p.Info,
+		})
+	}
+	return processList, nil
+}
+
+func (s *Shim) ResizePty(ctx context.Context, size runtime.ConsoleSize) error {
+	_, err := s.task.ResizePty(ctx, &task.ResizePtyRequest{
+		ID:     s.ID(),
+		Width:  size.Width,
+		Height: size.Height,
+	})
+	if err != nil {
+		return errdefs.FromGRPC(err)
+	}
+	return nil
+}
+
+func (s *Shim) CloseIO(ctx context.Context) error {
+	_, err := s.task.CloseIO(ctx, &task.CloseIORequest{
+		ID:    s.ID(),
+		Stdin: true,
+	})
+	if err != nil {
+		return errdefs.FromGRPC(err)
+	}
+	return nil
+}
+
+func (s *Shim) Wait(ctx context.Context) (*runtime.Exit, error) {
+	response, err := s.task.Wait(ctx, &task.WaitRequest{
+		ID: s.ID(),
+	})
+	if err != nil {
+		return nil, errdefs.FromGRPC(err)
+	}
+	return &runtime.Exit{
+		Pid:       s.taskPid,
+		Timestamp: response.ExitedAt,
+		Status:    response.ExitStatus,
+	}, nil
 }
 
 func shimCommand(ctx context.Context, runtime, containerdAddress string, bundle *Bundle) (*exec.Cmd, error) {

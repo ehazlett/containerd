@@ -86,8 +86,7 @@ func (m *TaskManager) Delete(ctx context.Context, task runtime.Task) (*runtime.E
 	if err := m.monitor.Stop(task); err != nil {
 		return nil, err
 	}
-	shim := task.(*Shim)
-	exit, err := shim.Delete(ctx)
+	exit, err := task.Delete(ctx)
 	if err != nil {
 		return nil, err
 	}
