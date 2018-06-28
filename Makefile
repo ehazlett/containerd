@@ -172,6 +172,10 @@ bin/containerd-shim: cmd/containerd-shim FORCE # set !cgo and omit pie for a sta
 	@echo "$(WHALE) bin/containerd-shim"
 	@CGO_ENABLED=0 go build ${GO_BUILD_FLAGS} -o bin/containerd-shim ${SHIM_GO_LDFLAGS} ${GO_TAGS} ./cmd/containerd-shim
 
+bin/containerd-shim-process: cmd/containerd-shim-process FORCE # set !cgo and omit pie for a static shim build: https://github.com/golang/go/issues/17789#issuecomment-258542220
+	@echo "$(WHALE) bin/containerd-shim-process"
+	@CGO_ENABLED=0 go build ${GO_BUILD_FLAGS} -o bin/containerd-shim-process ${SHIM_GO_LDFLAGS} ${GO_TAGS} ./cmd/containerd-shim-process
+
 binaries: $(BINARIES) ## build binaries
 	@echo "$(WHALE) $@"
 
