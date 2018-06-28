@@ -51,7 +51,7 @@ func (m *TaskManager) Create(ctx context.Context, id string, opts runtime.Create
 			bundle.Delete()
 		}
 	}()
-	shim, err := NewShim(ctx, bundle, opts.Runtime, m.containerdAddress, m.events)
+	shim, err := NewShim(ctx, bundle, opts.Runtime, m.containerdAddress, m.events, m.tasks)
 	if err != nil {
 		return nil, err
 	}
@@ -67,10 +67,6 @@ func (m *TaskManager) Create(ctx context.Context, id string, opts runtime.Create
 	if err := m.tasks.Add(ctx, task); err != nil {
 		return nil, err
 	}
-	// TODO: maybe not fail here?
-	if err := m.monitor.Monitor(task); err != nil {
-		return nil, err
-	}
 	return task, nil
 }
 
@@ -80,16 +76,4 @@ func (m *TaskManager) Get(ctx context.Context, id string) (runtime.Task, error) 
 
 func (m *TaskManager) Tasks(ctx context.Context) ([]runtime.Task, error) {
 	return m.tasks.GetAll(ctx)
-}
-
-func (m *TaskManager) Delete(ctx context.Context, task runtime.Task) (*runtime.Exit, error) {
-	if err := m.monitor.Stop(task); err != nil {
-		return nil, err
-	}
-	exit, err := task.Delete(ctx)
-	if err != nil {
-		return nil, err
-	}
-	m.tasks.Delete(ctx, task.ID())
-	return exit, nil
 }

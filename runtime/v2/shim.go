@@ -16,7 +16,6 @@ import (
 	"github.com/containerd/containerd/runtime/v2/task"
 	"github.com/containerd/containerd/sys"
 	"github.com/containerd/ttrpc"
-	"github.com/containerd/typeurl"
 	ptypes "github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -26,7 +25,7 @@ import (
 const shimBinaryFormat = "containerd-shim-%s"
 
 // NewShim starts and returns a new shim
-func NewShim(ctx context.Context, bundle *Bundle, runtime, containerdAddress string, events *exchange.Exchange) (_ *Shim, err error) {
+func NewShim(ctx context.Context, bundle *Bundle, runtime, containerdAddress string, events *exchange.Exchange, rt *runtime.TaskList) (_ *Shim, err error) {
 	if err := identifiers.Validate(bundle.ID); err != nil {
 		return nil, errors.Wrapf(err, "invalid task id")
 	}
@@ -85,6 +84,7 @@ func NewShim(ctx context.Context, bundle *Bundle, runtime, containerdAddress str
 		task:    task.NewTaskClient(client),
 		shimPid: cmd.Process.Pid,
 		events:  events,
+		rtTasks: rt,
 	}, nil
 }
 
@@ -95,8 +95,10 @@ type Shim struct {
 	shimPid int
 	taskPid int
 	events  *exchange.Exchange
+	rtTasks *runtime.TaskList
 }
 
+// TODO: remove this in favor of shim rpc
 func (s *Shim) kill(killDuration time.Duration) error {
 	dead := make(chan struct{})
 	if err := unix.Kill(s.shimPid, unix.SIGTERM); err != nil && err != unix.ESRCH {
@@ -126,6 +128,10 @@ func (s *Shim) ID() string {
 	return s.bundle.ID
 }
 
+func (s *Shim) Namespace() string {
+	return s.bundle.Namespace
+}
+
 func (s *Shim) Close() error {
 	return s.client.Close()
 }
@@ -143,6 +149,9 @@ func (s *Shim) Delete(ctx context.Context) (*runtime.Exit, error) {
 	if err := s.bundle.Delete(); err != nil {
 		return nil, err
 	}
+	// remove self from the runtime task list
+	// this seems dirty but it cleans up the API across runtimes, tasks, and the service
+	s.rtTasks.Delete(ctx, s.ID())
 	s.events.Publish(ctx, runtime.TaskDeleteEventTopic, &eventstypes.TaskDelete{
 		ContainerID: s.ID(),
 		ExitStatus:  response.ExitStatus,
@@ -326,12 +335,12 @@ func (s *Shim) Update(ctx context.Context, resources *ptypes.Any) error {
 	return nil
 }
 
-func (s *Shim) Stats(ctx context.Context) (interface{}, error) {
+func (s *Shim) Stats(ctx context.Context) (*ptypes.Any, error) {
 	response, err := s.task.Stats(ctx, &task.StatsRequest{})
 	if err != nil {
 		return nil, errdefs.FromGRPC(err)
 	}
-	return typeurl.UnmarshalAny(response.Stats)
+	return response.Stats, nil
 }
 
 func (s *Shim) Process(ctx context.Context, id string) (runtime.Process, error) {

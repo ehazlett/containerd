@@ -54,8 +54,8 @@ type Process interface {
 type Task interface {
 	Process
 
-	// Information of the container
-	//Info() TaskInfo
+	// Namespace that the task exists in
+	Namespace() string
 	// Pause pauses the container process
 	Pause(context.Context) error
 	// Resume unpauses the container process
@@ -71,7 +71,7 @@ type Task interface {
 	// Process returns a process within the task for the provided id
 	Process(context.Context, string) (Process, error)
 	// Stats returns runtime specific metrics for a task
-	Stats(context.Context) (interface{}, error)
+	Stats(context.Context) (*types.Any, error)
 }
 
 // ExecOpts provides additional options for additional processes running in a task

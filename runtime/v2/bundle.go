@@ -19,8 +19,9 @@ func LoadBundle(ctx context.Context, root, id string) (*Bundle, error) {
 		return nil, err
 	}
 	return &Bundle{
-		ID:   id,
-		Path: filepath.Join(root, ns, id),
+		ID:        id,
+		Path:      filepath.Join(root, ns, id),
+		Namespace: ns,
 	}, nil
 }
 
@@ -32,8 +33,9 @@ func NewBundle(ctx context.Context, root, state, id string, spec []byte) (b *Bun
 	}
 	work := filepath.Join(state, ns, id)
 	b = &Bundle{
-		ID:   id,
-		Path: filepath.Join(root, ns, id),
+		ID:        id,
+		Path:      filepath.Join(root, ns, id),
+		Namespace: ns,
 	}
 	paths := []string{b.Path, work}
 	defer func() {
@@ -72,6 +74,8 @@ type Bundle struct {
 	ID string
 	// Path to the bundle
 	Path string
+	// Namespace of the bundle
+	Namespace string
 }
 
 // Delete a bundle atomically

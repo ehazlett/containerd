@@ -42,6 +42,7 @@ import (
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/plugin"
 	"github.com/containerd/containerd/runtime"
+	"github.com/containerd/containerd/runtime/v2"
 	"github.com/containerd/containerd/services"
 	"github.com/containerd/typeurl"
 	ptypes "github.com/gogo/protobuf/types"
@@ -64,6 +65,7 @@ func init() {
 		Requires: []plugin.Type{
 			plugin.RuntimePlugin,
 			plugin.MetadataPlugin,
+			plugin.TaskMonitorPlugin,
 		},
 		InitFn: initFunc,
 	})
@@ -81,6 +83,7 @@ func initFunc(ic *plugin.InitContext) (interface{}, error) {
 	}
 	cs := m.(*metadata.DB).ContentStore()
 	runtimes := make(map[string]runtime.PlatformRuntime)
+	var v2Runtime *v2.TaskManager
 	for _, rr := range rt {
 		ri, err := rr.Instance()
 		if err != nil {
@@ -88,17 +91,28 @@ func initFunc(ic *plugin.InitContext) (interface{}, error) {
 			continue
 		}
 		r := ri.(runtime.PlatformRuntime)
-		runtimes[r.ID()] = r
+		if vt, ok := r.(*v2.TaskManager); ok {
+			v2Runtime = vt
+		} else {
+			runtimes[r.ID()] = r
+		}
 	}
 
 	if len(runtimes) == 0 {
 		return nil, errors.New("no runtimes available to create task service")
 	}
+	monitor, err := ic.Get(plugin.TaskMonitorPlugin)
+	if err != nil {
+		return nil, err
+	}
+
 	return &local{
 		runtimes:  runtimes,
 		db:        m.(*metadata.DB),
 		store:     cs,
 		publisher: ic.Events,
+		monitor:   monitor.(runtime.TaskMonitor),
+		v2Runtime: v2Runtime,
 	}, nil
 }
 
@@ -107,6 +121,9 @@ type local struct {
 	db        *metadata.DB
 	store     content.Store
 	publisher events.Publisher
+
+	monitor   runtime.TaskMonitor
+	v2Runtime *v2.TaskManager
 }
 
 func (l *local) Create(ctx context.Context, r *api.CreateTaskRequest, _ ...grpc.CallOption) (*api.CreateTaskResponse, error) {
@@ -167,11 +184,14 @@ func (l *local) Create(ctx context.Context, r *api.CreateTaskRequest, _ ...grpc.
 	if err != nil {
 		return nil, errdefs.ToGRPC(err)
 	}
+	// TODO: fast path for getting pid on create
+	if err := l.monitor.Monitor(c); err != nil {
+		return nil, err
+	}
 	state, err := c.State(ctx)
 	if err != nil {
 		log.G(ctx).Error(err)
 	}
-
 	return &api.CreateTaskResponse{
 		ContainerID: r.ContainerID,
 		Pid:         state.Pid,
@@ -206,13 +226,12 @@ func (l *local) Delete(ctx context.Context, r *api.DeleteTaskRequest, _ ...grpc.
 	if err != nil {
 		return nil, err
 	}
-	runtime, err := l.getRuntime(t.Info().Runtime)
-	if err != nil {
+	if err := l.monitor.Stop(t); err != nil {
 		return nil, err
 	}
-	exit, err := runtime.Delete(ctx, t)
+	exit, err := t.Delete(ctx)
 	if err != nil {
-		return nil, errdefs.ToGRPC(err)
+		return nil, err
 	}
 	return &api.DeleteResponse{
 		ExitStatus: exit.Status,
@@ -226,7 +245,11 @@ func (l *local) DeleteProcess(ctx context.Context, r *api.DeleteProcessRequest, 
 	if err != nil {
 		return nil, err
 	}
-	exit, err := t.DeleteProcess(ctx, r.ExecID)
+	process, err := t.Process(ctx, r.ExecID)
+	if err != nil {
+		return nil, err
+	}
+	exit, err := process.Delete(ctx)
 	if err != nil {
 		return nil, errdefs.ToGRPC(err)
 	}
@@ -503,6 +526,7 @@ func (l *local) Update(ctx context.Context, r *api.UpdateTaskRequest, _ ...grpc.
 }
 
 func (l *local) Metrics(ctx context.Context, r *api.MetricsRequest, _ ...grpc.CallOption) (*api.MetricsResponse, error) {
+	panic("fix metrics filters by getting containers then tasks")
 	filter, err := filters.ParseAll(r.Filters...)
 	if err != nil {
 		return nil, err
@@ -547,32 +571,26 @@ func getTasksMetrics(ctx context.Context, filter filters.Filter, tasks []runtime
 			case "id":
 				return t.ID(), true
 			case "namespace":
-				return t.Info().Namespace, true
+			//	return t.Info().Namespace, true
 			case "runtime":
-				return t.Info().Runtime, true
+				//	return t.Info().Runtime, true
 			}
 			return "", false
 		})) {
 			continue
 		}
-
 		collected := time.Now()
-		metrics, err := tk.Metrics(ctx)
+		stats, err := tk.Stats(ctx)
 		if err != nil {
 			if !errdefs.IsNotFound(err) {
 				log.G(ctx).WithError(err).Errorf("collecting metrics for %s", tk.ID())
 			}
 			continue
 		}
-		data, err := typeurl.MarshalAny(metrics)
-		if err != nil {
-			log.G(ctx).WithError(err).Errorf("marshal metrics for %s", tk.ID())
-			continue
-		}
 		r.Metrics = append(r.Metrics, &types.Metric{
-			ID:        tk.ID(),
 			Timestamp: collected,
-			Data:      data,
+			ID:        tk.ID(),
+			Data:      stats,
 		})
 	}
 }
@@ -633,7 +651,8 @@ func (l *local) getTaskFromContainer(ctx context.Context, container *containers.
 func (l *local) getRuntime(name string) (runtime.PlatformRuntime, error) {
 	runtime, ok := l.runtimes[name]
 	if !ok {
-		return nil, status.Errorf(codes.NotFound, "unknown runtime %q", name)
+		// one runtime to rule them all
+		return l.v2Runtime, nil
 	}
 	return runtime, nil
 }

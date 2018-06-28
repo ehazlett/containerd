@@ -149,3 +149,17 @@ func (p *Process) Wait(ctx context.Context) (*runtime.Exit, error) {
 		Status:    r.ExitStatus,
 	}, nil
 }
+
+func (p *Process) Delete(ctx context.Context) (*runtime.Exit, error) {
+	r, err := p.t.shim.DeleteProcess(ctx, &shim.DeleteProcessRequest{
+		ID: p.id,
+	})
+	if err != nil {
+		return nil, errdefs.FromGRPC(err)
+	}
+	return &runtime.Exit{
+		Status:    r.ExitStatus,
+		Timestamp: r.ExitedAt,
+		Pid:       r.Pid,
+	}, nil
+}

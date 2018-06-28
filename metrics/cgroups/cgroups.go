@@ -80,16 +80,15 @@ type cgroupsMonitor struct {
 }
 
 func (m *cgroupsMonitor) Monitor(c runtime.Task) error {
-	info := c.Info()
 	t := c.(*linux.Task)
 	cg, err := t.Cgroup()
 	if err != nil {
 		return err
 	}
-	if err := m.collector.Add(info.ID, info.Namespace, cg); err != nil {
+	if err := m.collector.Add(c.ID(), c.Namespace(), cg); err != nil {
 		return err
 	}
-	err = m.oom.Add(info.ID, info.Namespace, cg, m.trigger)
+	err = m.oom.Add(c.ID(), c.Namespace(), cg, m.trigger)
 	if err == cgroups.ErrMemoryNotSupported {
 		logrus.WithError(err).Warn("OOM monitoring failed")
 		return nil
@@ -98,17 +97,16 @@ func (m *cgroupsMonitor) Monitor(c runtime.Task) error {
 }
 
 func (m *cgroupsMonitor) Stop(c runtime.Task) error {
-	info := c.Info()
 	t := c.(*linux.Task)
 
 	cgroup, err := t.Cgroup()
 	if err != nil {
 		log.G(m.context).WithError(err).Warnf("unable to retrieve cgroup on stop")
 	} else {
-		m.collector.collect(info.ID, info.Namespace, cgroup, m.collector.storedMetrics, false, nil)
+		m.collector.collect(c.ID(), c.Namespace(), cgroup, m.collector.storedMetrics, false, nil)
 	}
 
-	m.collector.Remove(info.ID, info.Namespace)
+	m.collector.Remove(c.ID(), c.Namespace())
 	return nil
 }
 
