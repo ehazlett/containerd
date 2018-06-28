@@ -98,7 +98,9 @@ var deleteCommand = cli.Command{
 		if err != nil {
 			return err
 		}
-		r, err := service.Delete(gocontext.Background(), empty)
+		r, err := service.Delete(gocontext.Background(), &task.DeleteRequest{
+			ID: context.Args().First(),
+		})
 		if err != nil {
 			return err
 		}

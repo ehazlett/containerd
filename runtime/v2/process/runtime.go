@@ -24,10 +24,18 @@ import (
 	ptypes "github.com/gogo/protobuf/types"
 )
 
-type ProcessRuntime struct{}
+type ProcessRuntime struct {
+	id string
+}
 
 func NewProcessRuntime() *ProcessRuntime {
-	return &ProcessRuntime{}
+	return &ProcessRuntime{
+		id: "test",
+	}
+}
+
+func (r *ProcessRuntime) ID(ctx context.Context, _ *ptypes.Empty) (*taskapi.IDResponse, error) {
+	return &taskapi.IDResponse{ID: r.id}, nil
 }
 
 func (r *ProcessRuntime) State(ctx context.Context, req *taskapi.StateRequest) (*taskapi.StateResponse, error) {
@@ -45,14 +53,8 @@ func (r *ProcessRuntime) Start(ctx context.Context, req *taskapi.StartRequest) (
 	return &taskapi.StartResponse{}, nil
 }
 
-func (r *ProcessRuntime) Delete(ctx context.Context, _ *ptypes.Empty) (*taskapi.DeleteResponse, error) {
+func (r *ProcessRuntime) Delete(ctx context.Context, req *taskapi.DeleteRequest) (*taskapi.DeleteResponse, error) {
 	fmt.Println("DELETE")
-	return &taskapi.DeleteResponse{}, nil
-
-}
-
-func (r *ProcessRuntime) DeleteProcess(ctx context.Context, req *taskapi.DeleteProcessRequest) (*taskapi.DeleteResponse, error) {
-	fmt.Println("DELETEPROCESS")
 	return &taskapi.DeleteResponse{}, nil
 
 }
@@ -114,5 +116,11 @@ func (r *ProcessRuntime) Update(ctx context.Context, req *taskapi.UpdateTaskRequ
 func (r *ProcessRuntime) Wait(ctx context.Context, req *taskapi.WaitRequest) (*taskapi.WaitResponse, error) {
 	fmt.Println("WAIT")
 	return &taskapi.WaitResponse{}, nil
+
+}
+
+func (r *ProcessRuntime) Stats(ctx context.Context, req *taskapi.StatsRequest) (*taskapi.StatsResponse, error) {
+	fmt.Println("STATS")
+	return &taskapi.StatsResponse{}, nil
 
 }

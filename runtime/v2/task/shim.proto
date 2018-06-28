@@ -16,6 +16,7 @@ option go_package = "github.com/containerd/containerd/runtime/v2/task;task";
 // each container and allows reattaching to the IO and receiving the exit status
 // for the container processes.
 service Task {
+        rpc ID(google.protobuf.Empty) returns (IDResponse);
 	rpc State(StateRequest) returns (StateResponse);
 	rpc Create(CreateTaskRequest) returns (CreateTaskResponse);
 	rpc Start(StartRequest) returns (StartResponse);
@@ -31,6 +32,10 @@ service Task {
 	rpc Update(UpdateTaskRequest) returns (google.protobuf.Empty);
 	rpc Wait(WaitRequest) returns (WaitResponse);
 	rpc Stats(StatsRequest) returns (StatsResponse);
+}
+
+message IDResponse {
+  string id = 1 [(gogoproto.customname) = "ID"];
 }
 
 message CreateTaskRequest {

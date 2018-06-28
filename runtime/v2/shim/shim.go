@@ -37,11 +37,11 @@ import (
 	rt "github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/shim"
 	shimapi "github.com/containerd/containerd/runtime/v2/task"
+	"github.com/containerd/ttrpc"
 	"github.com/containerd/typeurl"
 	ptypes "github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	"github.com/stevvooe/ttrpc"
 	"golang.org/x/sys/unix"
 )
 
@@ -204,7 +204,13 @@ func handleSignals(logger *logrus.Entry, signals chan os.Signal, server *ttrpc.S
 						Signal: uint32(syscall.SIGKILL),
 						All:    true,
 					})
-					sv.Delete(context.Background(), &ptypes.Empty{})
+					idResp, err := sv.ID(ctx, &ptypes.Empty{})
+					if err != nil {
+						logger.WithError(err).Error("failed to get id")
+					}
+					sv.Delete(context.Background(), &shimapi.DeleteRequest{
+						ID: idResp.ID,
+					})
 					close(done)
 				})
 			case unix.SIGPIPE:
