@@ -60,11 +60,8 @@ func main() {
 		WorkDir:              workdirFlag,
 		ContainerdBinaryPath: containerdBinaryFlag,
 	}
-
 	svc := process.NewProcessRuntime()
-
-	s := shim.NewShim(cfg, svc)
-
+	s := shim.NewShimClient(cfg, svc)
 	if err := s.Serve(); err != nil {
 		fmt.Fprintf(os.Stderr, "containerd-shim: %s\n", err)
 		os.Exit(1)

@@ -19,17 +19,25 @@
 package shim
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 
+	eventstypes "github.com/containerd/containerd/api/events"
+	"github.com/containerd/containerd/events"
+	"github.com/containerd/containerd/log"
+	"github.com/containerd/containerd/namespaces"
+	rt "github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/shim"
 	shimapi "github.com/containerd/containerd/runtime/v2/task"
+	"github.com/containerd/typeurl"
 	ptypes "github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -37,19 +45,35 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type Shim struct {
+type ShimClient struct {
 	config  *Config
-	service shimapi.TaskServer
+	service shimapi.TaskService
+	context context.Context
+	events  chan interface{}
 }
 
-func NewShim(cfg *Config, s shimapi.TaskServer) *Shim {
-	return &Shim{
-		config:  cfg,
-		service: s,
+func NewShimClient(config *Config, svc shimapi.TaskService) *ShimClient {
+	ctx := namespaces.WithNamespace(context.Background(), config.Namespace)
+	ctx = log.WithLogger(ctx, logrus.WithFields(logrus.Fields{
+		"namespace": config.Namespace,
+		"socket":    config.Socket,
+		"pid":       os.Getpid(),
+	}))
+	publisher := &remoteEventsPublisher{
+		address:              config.Address,
+		containerdBinaryPath: config.ContainerdBinaryPath,
 	}
+	s := &ShimClient{
+		config:  config,
+		service: svc,
+		context: ctx,
+		events:  make(chan interface{}, 128),
+	}
+	go s.forward(publisher)
+	return s
 }
 
-func (s *Shim) Serve() error {
+func (s *ShimClient) Serve() error {
 	// start handling signals as soon as possible so that things are properly reaped
 	// or if runtime exits before we hit the handler
 	signals, err := setupSignals()
@@ -69,7 +93,7 @@ func (s *Shim) Serve() error {
 	}
 
 	logrus.Debug("registering ttrpc server")
-	shimapi.RegisterShimService(server, s.service)
+	shimapi.RegisterTaskService(server, s.service)
 
 	if err := serve(server, s.config.Socket); err != nil {
 		return err
@@ -85,6 +109,42 @@ func (s *Shim) Serve() error {
 		}
 	}()
 	return handleSignals(logger, signals, server, s.service)
+}
+
+func (s *ShimClient) forward(publisher events.Publisher) {
+	for e := range s.events {
+		if err := publisher.Publish(s.context, getTopic(s.context, e), e); err != nil {
+			log.G(s.context).WithError(err).Error("post event")
+		}
+	}
+}
+
+func getTopic(ctx context.Context, e interface{}) string {
+	switch e.(type) {
+	case *eventstypes.TaskCreate:
+		return rt.TaskCreateEventTopic
+	case *eventstypes.TaskStart:
+		return rt.TaskStartEventTopic
+	case *eventstypes.TaskOOM:
+		return rt.TaskOOMEventTopic
+	case *eventstypes.TaskExit:
+		return rt.TaskExitEventTopic
+	case *eventstypes.TaskDelete:
+		return rt.TaskDeleteEventTopic
+	case *eventstypes.TaskExecAdded:
+		return rt.TaskExecAddedEventTopic
+	case *eventstypes.TaskExecStarted:
+		return rt.TaskExecStartedEventTopic
+	case *eventstypes.TaskPaused:
+		return rt.TaskPausedEventTopic
+	case *eventstypes.TaskResumed:
+		return rt.TaskResumedEventTopic
+	case *eventstypes.TaskCheckpointed:
+		return rt.TaskCheckpointedEventTopic
+	default:
+		logrus.Warnf("no topic for type %#v", e)
+	}
+	return rt.TaskUnknownTopic
 }
 
 // serve serves the ttrpc API over a unix socket at the provided path
@@ -117,7 +177,7 @@ func serve(server *ttrpc.Server, path string) error {
 	return nil
 }
 
-func handleSignals(logger *logrus.Entry, signals chan os.Signal, server *ttrpc.Server, sv shimapi.TaskServer) error {
+func handleSignals(logger *logrus.Entry, signals chan os.Signal, server *ttrpc.Server, sv shimapi.TaskService) error {
 	var (
 		termOnce sync.Once
 		done     = make(chan struct{})
@@ -168,32 +228,33 @@ func dumpStacks(logger *logrus.Entry) {
 	logger.Infof("=== BEGIN goroutine stack dump ===\n%s\n=== END goroutine stack dump ===", buf)
 }
 
-//type remoteEventsPublisher struct {
-//	address string
-//}
-//
-//func (l *remoteEventsPublisher) Publish(ctx context.Context, topic string, event events.Event) error {
-//	ns, _ := namespaces.Namespace(ctx)
-//	encoded, err := typeurl.MarshalAny(event)
-//	if err != nil {
-//		return err
-//	}
-//	data, err := encoded.Marshal()
-//	if err != nil {
-//		return err
-//	}
-//	cmd := exec.CommandContext(ctx, containerdBinaryFlag, "--address", l.address, "publish", "--topic", topic, "--namespace", ns)
-//	cmd.Stdin = bytes.NewReader(data)
-//	c, err := shim.Default.Start(cmd)
-//	if err != nil {
-//		return err
-//	}
-//	status, err := shim.Default.Wait(cmd, c)
-//	if err != nil {
-//		return err
-//	}
-//	if status != 0 {
-//		return errors.New("failed to publish event")
-//	}
-//	return nil
-//}
+type remoteEventsPublisher struct {
+	address              string
+	containerdBinaryPath string
+}
+
+func (l *remoteEventsPublisher) Publish(ctx context.Context, topic string, event events.Event) error {
+	ns, _ := namespaces.Namespace(ctx)
+	encoded, err := typeurl.MarshalAny(event)
+	if err != nil {
+		return err
+	}
+	data, err := encoded.Marshal()
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, l.containerdBinaryPath, "--address", l.address, "publish", "--topic", topic, "--namespace", ns)
+	cmd.Stdin = bytes.NewReader(data)
+	c, err := Default.Start(cmd)
+	if err != nil {
+		return err
+	}
+	status, err := Default.Wait(cmd, c)
+	if err != nil {
+		return err
+	}
+	if status != 0 {
+		return errors.New("failed to publish event")
+	}
+	return nil
+}
