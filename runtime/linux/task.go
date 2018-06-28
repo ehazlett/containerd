@@ -28,13 +28,13 @@ import (
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/events/exchange"
 	"github.com/containerd/containerd/identifiers"
+	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/shim/client"
 	shim "github.com/containerd/containerd/runtime/shim/v1"
 	runc "github.com/containerd/go-runc"
 	"github.com/containerd/ttrpc"
 	"github.com/containerd/typeurl"
-	"github.com/docker/swarmkit/log"
 	"github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 )
@@ -80,6 +80,7 @@ func (t *Task) ID() string {
 	return t.id
 }
 
+// Namespace of the task
 func (t *Task) Namespace() string {
 	return t.namespace
 }

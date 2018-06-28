@@ -29,6 +29,10 @@ func NewShim(ctx context.Context, bundle *Bundle, runtime, containerdAddress str
 	if err := identifiers.Validate(bundle.ID); err != nil {
 		return nil, errors.Wrapf(err, "invalid task id")
 	}
+	cmd, err := shimCommand(ctx, runtime, containerdAddress, bundle)
+	if err != nil {
+		return nil, err
+	}
 	address, err := abstractAddress(ctx, bundle.ID)
 	if err != nil {
 		return nil, err
@@ -44,10 +48,6 @@ func NewShim(ctx context.Context, bundle *Bundle, runtime, containerdAddress str
 	}
 	defer f.Close()
 
-	cmd, err := shimCommand(ctx, runtime, containerdAddress, bundle)
-	if err != nil {
-		return nil, err
-	}
 	cmd.ExtraFiles = append(cmd.ExtraFiles, f)
 
 	if err := cmd.Start(); err != nil {
