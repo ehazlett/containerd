@@ -19,8 +19,7 @@ service Task {
 	rpc State(StateRequest) returns (StateResponse);
 	rpc Create(CreateTaskRequest) returns (CreateTaskResponse);
 	rpc Start(StartRequest) returns (StartResponse);
-	rpc Delete(google.protobuf.Empty) returns (DeleteResponse);
-	rpc DeleteProcess(DeleteProcessRequest) returns (DeleteResponse);
+	rpc Delete(DeleteRequest) returns (DeleteResponse);
 	rpc Pids(PidsRequest) returns (PidsResponse);
 	rpc Pause(google.protobuf.Empty) returns (google.protobuf.Empty);
 	rpc Resume(google.protobuf.Empty) returns (google.protobuf.Empty);
@@ -31,6 +30,7 @@ service Task {
 	rpc CloseIO(CloseIORequest) returns (google.protobuf.Empty);
 	rpc Update(UpdateTaskRequest) returns (google.protobuf.Empty);
 	rpc Wait(WaitRequest) returns (WaitResponse);
+	rpc Stats(StatsRequest) returns (StatsResponse);
 }
 
 message CreateTaskRequest {
@@ -50,14 +50,14 @@ message CreateTaskResponse {
 	uint32 pid = 1;
 }
 
+message DeleteRequest {
+	string id = 1;
+}
+
 message DeleteResponse {
 	uint32 pid = 1;
 	uint32 exit_status = 2;
 	google.protobuf.Timestamp exited_at = 3 [(gogoproto.stdtime) = true, (gogoproto.nullable) = false];
-}
-
-message DeleteProcessRequest {
-	string id = 1;
 }
 
 message ExecProcessRequest {
@@ -139,4 +139,12 @@ message WaitRequest {
 message WaitResponse {
 	uint32 exit_status = 1;
 	google.protobuf.Timestamp exited_at = 2 [(gogoproto.stdtime) = true, (gogoproto.nullable) = false];
+}
+
+message StatsRequest {
+
+}
+
+message StatsResponse {
+	google.protobuf.Any stats = 1;
 }

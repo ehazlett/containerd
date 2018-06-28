@@ -2,12 +2,12 @@ package v2
 
 import (
 	"context"
-	"errors"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 
 	"github.com/containerd/containerd/namespaces"
+	"github.com/pkg/errors"
 )
 
 const configFilename = "config.json"
@@ -59,7 +59,7 @@ func NewBundle(ctx context.Context, root, state, id string, spec []byte) (b *Bun
 		return nil, err
 	}
 	// symlink workdir
-	if err := os.Symlink(b.WorkDir, filepath.Join(b.Path, "work")); err != nil {
+	if err := os.Symlink(work, filepath.Join(b.Path, "work")); err != nil {
 		return nil, err
 	}
 	// write the spec to the bundle
@@ -80,7 +80,7 @@ func (b *Bundle) Delete() error {
 	if err != nil {
 		return err
 	}
-	err := os.RemoveAll(b.Path)
+	err = os.RemoveAll(b.Path)
 	if err == nil {
 		return os.RemoveAll(work)
 	}

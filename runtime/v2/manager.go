@@ -51,9 +51,9 @@ func (m *TaskManager) Create(ctx context.Context, id string, opts runtime.Create
 			bundle.Delete()
 		}
 	}()
-	shim, err := NewShim(ctx, bundle, opts.Runtime, m.events)
+	shim, err := NewShim(ctx, bundle, opts.Runtime, m.containerdAddress, m.events)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() {
 		if err != nil {

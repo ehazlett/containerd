@@ -2,25 +2,23 @@ package v2
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"net"
-	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	eventstypes "github.com/containerd/containerd/api/events"
 	"github.com/containerd/containerd/api/types"
+	tasktypes "github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/events/exchange"
+	"github.com/containerd/containerd/identifiers"
 	"github.com/containerd/containerd/log"
-	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/v2/task"
 	"github.com/containerd/containerd/sys"
 	"github.com/containerd/ttrpc"
+	"github.com/containerd/typeurl"
+	ptypes "github.com/gogo/protobuf/types"
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
@@ -29,6 +27,9 @@ const shimBinaryFormat = "containerd-shim-%s"
 
 // NewShim starts and returns a new shim
 func NewShim(ctx context.Context, bundle *Bundle, runtime, containerdAddress string, events *exchange.Exchange) (_ *Shim, err error) {
+	if err := identifiers.Validate(bundle.ID); err != nil {
+		return nil, errors.Wrapf(err, "invalid task id")
+	}
 	address, err := abstractAddress(ctx, bundle.ID)
 	if err != nil {
 		return nil, err
@@ -77,7 +78,7 @@ func NewShim(ctx context.Context, bundle *Bundle, runtime, containerdAddress str
 		return nil, err
 	}
 	client := ttrpc.NewClient(conn)
-	client.OnClose(conn.Close)
+	client.OnClose(func() { conn.Close() })
 	return &Shim{
 		bundle:  bundle,
 		client:  client,
@@ -90,7 +91,7 @@ func NewShim(ctx context.Context, bundle *Bundle, runtime, containerdAddress str
 type Shim struct {
 	bundle  *Bundle
 	client  *ttrpc.Client
-	task    task.TaskClient
+	task    task.TaskService
 	shimPid int
 	taskPid int
 	events  *exchange.Exchange
@@ -130,7 +131,9 @@ func (s *Shim) Close() error {
 }
 
 func (s *Shim) Delete(ctx context.Context) (*runtime.Exit, error) {
-	response, err := s.task.Delete(ctx, empty)
+	response, err := s.task.Delete(ctx, &task.DeleteRequest{
+		ID: s.ID(),
+	})
 	if err != nil {
 		return nil, errdefs.FromGRPC(err)
 	}
@@ -153,7 +156,7 @@ func (s *Shim) Delete(ctx context.Context) (*runtime.Exit, error) {
 	}, nil
 }
 
-func (s *Shim) Create(ctx context.Context, opts runtime.CreateOpts) (Task, error) {
+func (s *Shim) Create(ctx context.Context, opts runtime.CreateOpts) (runtime.Task, error) {
 	request := &task.CreateTaskRequest{
 		ID:         s.ID(),
 		Bundle:     s.bundle.Path,
@@ -165,7 +168,7 @@ func (s *Shim) Create(ctx context.Context, opts runtime.CreateOpts) (Task, error
 		Options:    opts.Options,
 	}
 	for _, m := range opts.Rootfs {
-		sopts.Rootfs = append(sopts.Rootfs, &types.Mount{
+		request.Rootfs = append(request.Rootfs, &types.Mount{
 			Type:    m.Type,
 			Source:  m.Source,
 			Options: m.Options,
@@ -226,7 +229,24 @@ func (s *Shim) Kill(ctx context.Context, signal uint32, all bool) error {
 }
 
 func (s *Shim) Exec(ctx context.Context, id string, opts runtime.ExecOpts) (runtime.Process, error) {
-
+	if err := identifiers.Validate(id); err != nil {
+		return nil, errors.Wrapf(err, "invalid exec id")
+	}
+	request := &task.ExecProcessRequest{
+		ID:       id,
+		Stdin:    opts.IO.Stdin,
+		Stdout:   opts.IO.Stdout,
+		Stderr:   opts.IO.Stderr,
+		Terminal: opts.IO.Terminal,
+		Spec:     opts.Spec,
+	}
+	if _, err := s.task.Exec(ctx, request); err != nil {
+		return nil, errdefs.FromGRPC(err)
+	}
+	return &Process{
+		id:   id,
+		shim: s,
+	}, nil
 }
 
 func (s *Shim) Pids(ctx context.Context) ([]runtime.ProcessInfo, error) {
@@ -277,80 +297,81 @@ func (s *Shim) Wait(ctx context.Context) (*runtime.Exit, error) {
 		return nil, errdefs.FromGRPC(err)
 	}
 	return &runtime.Exit{
-		Pid:       s.taskPid,
+		Pid:       uint32(s.taskPid),
 		Timestamp: response.ExitedAt,
 		Status:    response.ExitStatus,
 	}, nil
 }
 
-func shimCommand(ctx context.Context, runtime, containerdAddress string, bundle *Bundle) (*exec.Cmd, error) {
-	ns, err := namespaces.NamespaceRequired(ctx)
-	if err != nil {
-		return nil, err
+func (s *Shim) Checkpoint(ctx context.Context, path string, options *ptypes.Any) error {
+	request := &task.CheckpointTaskRequest{
+		Path:    path,
+		Options: options,
 	}
-	self, err := os.Executable()
-	if err != nil {
-		return nil, err
+	if _, err := s.task.Checkpoint(ctx, request); err != nil {
+		return errdefs.FromGRPC(err)
 	}
-	args := []string{
-		"-namespace": ns,
-		"-address":   containerdAddress,
-		"-containerd-binary", self,
-	}
-	cmd := exec.Command(getShimBinaryName(runtime), args...)
-	cmd.Dir = bundle.Path
-	cmd.Env = append(os.Environ(), "GOMAXPROCS=2")
-	cmd.SysProcAttr = getSysProcAttr()
-	return cmd, nil
+	s.events.Publish(ctx, runtime.TaskCheckpointedEventTopic, &eventstypes.TaskCheckpointed{
+		ContainerID: s.ID(),
+	})
+	return nil
 }
 
-func getShimBinaryName(runtime string) string {
-	parts := strings.Split(runtime, ".")
-	return fmt.Sprintf(shimBinaryFormat, parts[len(parts)-1])
+func (s *Shim) Update(ctx context.Context, resources *ptypes.Any) error {
+	if _, err := s.task.Update(ctx, &task.UpdateTaskRequest{
+		Resources: resources,
+	}); err != nil {
+		return errdefs.FromGRPC(err)
+	}
+	return nil
 }
 
-func abstractAddress(ctx context.Context, id string) (string, error) {
-	ns, err := namespaces.NamespaceRequired(ctx)
+func (s *Shim) Stats(ctx context.Context) (interface{}, error) {
+	response, err := s.task.Stats(ctx, &task.StatsRequest{})
 	if err != nil {
-		return "", err
+		return nil, errdefs.FromGRPC(err)
 	}
-	return filepath.Join(string(filepath.Separator), "containerd-shim", ns, id, "shim.sock"), nil
+	return typeurl.UnmarshalAny(response.Stats)
 }
 
-func connect(address string, d func(string, time.Duration) (net.Conn, error)) (net.Conn, error) {
-	return d(address, 100*time.Second)
+func (s *Shim) Process(ctx context.Context, id string) (runtime.Process, error) {
+	return &Process{
+		id:   id,
+		shim: s,
+	}, nil
 }
 
-func annonDialer(address string, timeout time.Duration) (net.Conn, error) {
-	address = strings.TrimPrefix(address, "unix://")
-	return net.DialTimeout("unix", "\x00"+address, timeout)
-}
-
-func newSocket(address string) (*net.UnixListener, error) {
-	if len(address) > 106 {
-		return nil, errors.Errorf("%q: unix socket path too long (> 106)", address)
-	}
-	l, err := net.Listen("unix", "\x00"+address)
+func (s *Shim) State(ctx context.Context) (runtime.State, error) {
+	response, err := s.task.State(ctx, &task.StateRequest{
+		ID: s.ID(),
+	})
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to listen to abstract unix socket %q", address)
+		if errors.Cause(err) != ttrpc.ErrClosed {
+			return runtime.State{}, errdefs.FromGRPC(err)
+		}
+		return runtime.State{}, errdefs.ErrNotFound
 	}
-	return l.(*net.UnixListener), nil
-}
-
-func writePidFile(path string, pid int) error {
-	path, err := filepath.Abs(path)
-	if err != nil {
-		return err
+	var status runtime.Status
+	switch response.Status {
+	case tasktypes.StatusCreated:
+		status = runtime.CreatedStatus
+	case tasktypes.StatusRunning:
+		status = runtime.RunningStatus
+	case tasktypes.StatusStopped:
+		status = runtime.StoppedStatus
+	case tasktypes.StatusPaused:
+		status = runtime.PausedStatus
+	case tasktypes.StatusPausing:
+		status = runtime.PausingStatus
 	}
-	tempPath := filepath.Join(filepath.Dir(path), fmt.Sprintf(".%s", filepath.Base(path)))
-	f, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_SYNC, 0666)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(f, "%d", pid)
-	f.Close()
-	if err != nil {
-		return err
-	}
-	return os.Rename(tempPath, path)
+	return runtime.State{
+		Pid:        response.Pid,
+		Status:     status,
+		Stdin:      response.Stdin,
+		Stdout:     response.Stdout,
+		Stderr:     response.Stderr,
+		Terminal:   response.Terminal,
+		ExitStatus: response.ExitStatus,
+		ExitedAt:   response.ExitedAt,
+	}, nil
 }

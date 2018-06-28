@@ -1,3 +1,5 @@
+// +build !linux,!windows
+
 package v2
 
 import "syscall"
