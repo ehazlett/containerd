@@ -71,7 +71,7 @@ TEST_REQUIRES_ROOT_PACKAGES=$(filter \
     )
 
 # Project binaries.
-COMMANDS=ctr containerd containerd-stress containerd-release
+COMMANDS=ctr containerd containerd-stress containerd-release containerd-shim-process-v1
 MANPAGES=ctr.1 containerd.1 config.toml.5 containerd-config.1
 
 # Build tags seccomp and apparmor are needed by CRI plugin.
@@ -175,6 +175,10 @@ bin/containerd-shim: cmd/containerd-shim FORCE # set !cgo and omit pie for a sta
 bin/containerd-shim-runc-v1: cmd/containerd-shim-runc-v1 FORCE # set !cgo and omit pie for a static shim build: https://github.com/golang/go/issues/17789#issuecomment-258542220
 	@echo "$(WHALE) bin/containerd-shim-runc-v1"
 	@CGO_ENABLED=0 go build ${GO_BUILD_FLAGS} -o bin/containerd-shim-runc-v1 ${SHIM_GO_LDFLAGS} ${GO_TAGS} ./cmd/containerd-shim-runc-v1
+
+bin/containerd-shim-process-v1: cmd/containerd-shim-process-v1 FORCE # set !cgo and omit pie for a static shim build: https://github.com/golang/go/issues/17789#issuecomment-258542220
+	@echo "$(WHALE) bin/containerd-shim-process-v1"
+	@CGO_ENABLED=0 go build ${GO_BUILD_FLAGS} -o bin/containerd-shim-process-v1 ${SHIM_GO_LDFLAGS} ${GO_TAGS} ./cmd/containerd-shim-process-v1
 
 binaries: $(BINARIES) ## build binaries
 	@echo "$(WHALE) $@"
