@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/events"
 	"github.com/containerd/containerd/log"
+	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/v2/shim"
@@ -57,7 +59,9 @@ type command struct {
 	stdin  string
 	stdout string
 	stderr string
-	// set on Start
+	// set on Create()
+	mounts []*mount.Mount
+	// set on Start()
 	pio *pipeIO
 }
 
@@ -82,6 +86,7 @@ type Service struct {
 	mu      sync.Mutex
 
 	bundle   string
+	rootfs   string
 	commands map[string]*command
 	pids     map[string]int
 	pidCh    chan *commandStart
@@ -138,7 +143,7 @@ func newCommand(ctx context.Context, containerdBinary, containerdAddress string)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "GOMAXPROCS=2")
 	cmd.Stdout = logfile
-	//cmd.Stderr = logfile
+	cmd.Stderr = logfile
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
 	}
@@ -191,7 +196,7 @@ func (s *Service) StartShim(ctx context.Context, id, containerdBinary, container
 	return address, nil
 }
 
-func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (*taskapi.CreateTaskResponse, error) {
+func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (_ *taskapi.CreateTaskResponse, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -204,8 +209,11 @@ func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (*ta
 	//	opts = *v.(*RuntimeOptions)
 	//}
 
+	rootfs := filepath.Join(r.Bundle, "rootfs")
+
 	s.bundle = r.Bundle
 	s.id = r.ID
+	s.rootfs = rootfs
 
 	s.logMsg(fmt.Sprintf("rootfs: %+v", r.Rootfs))
 
@@ -218,6 +226,26 @@ func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (*ta
 		return nil, errdefs.ToGRPC(err)
 	}
 
+	var mounts []*mount.Mount
+	for _, m := range r.Rootfs {
+		m := &mount.Mount{
+			Type:    m.Type,
+			Source:  m.Source,
+			Options: m.Options,
+		}
+		if err := m.Mount(rootfs); err != nil {
+			return nil, errors.Wrapf(err, "failed to mount rootfs component %v", m)
+		}
+		mounts = append(mounts, m)
+	}
+	defer func() {
+		if err != nil {
+			if _, err := s.Cleanup(ctx); err != nil {
+				logrus.WithError(err).Warn("failed to cleanup")
+			}
+		}
+	}()
+
 	if len(spec.Process.Args) == 0 {
 		return nil, errdefs.ToGRPC(fmt.Errorf("no process args specified"))
 	}
@@ -228,8 +256,21 @@ func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (*ta
 		args = spec.Process.Args[1:]
 	}
 
+	if filepath.IsAbs(cmd) {
+		cmd = filepath.Join(rootfs, cmd)
+	} else {
+		// check process env for path and search path for process
+		c, err := resolveRootfsCommand(rootfs, cmd, spec.Process.Env)
+		if err != nil {
+			return nil, errdefs.ToGRPC(err)
+		}
+		cmd = c
+	}
+
+	s.logMsg(fmt.Sprintf("cmd: %s", cmd))
+
 	c := exec.Command(cmd, args...)
-	c.Dir = spec.Process.Cwd
+	c.Dir = rootfs
 	c.Env = spec.Process.Env
 	c.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
@@ -239,6 +280,7 @@ func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (*ta
 		r.Stdin,
 		r.Stdout,
 		r.Stderr,
+		mounts,
 		nil,
 	}
 	s.commands[r.ID] = sc
@@ -248,7 +290,7 @@ func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (*ta
 	}, nil
 }
 
-func (s *Service) Start(ctx context.Context, r *taskapi.StartRequest) (*taskapi.StartResponse, error) {
+func (s *Service) Start(ctx context.Context, r *taskapi.StartRequest) (_ *taskapi.StartResponse, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -270,6 +312,13 @@ func (s *Service) Start(ctx context.Context, r *taskapi.StartRequest) (*taskapi.
 	if ioErr != nil {
 		return nil, errdefs.ToGRPC(ioErr)
 	}
+	defer func() {
+		if err != nil {
+			if _, err := s.Cleanup(ctx); err != nil {
+				logrus.WithError(err).Warn("failed to cleanup")
+			}
+		}
+	}()
 
 	s.logMsg("starting process")
 	if err := c.Start(); err != nil {
@@ -301,10 +350,6 @@ func (s *Service) State(ctx context.Context, r *taskapi.StateRequest) (*taskapi.
 	defer s.mu.Unlock()
 
 	pid, _ := s.pids[r.ID]
-	//if !ok {
-	//	return nil, errdefs.ToGRPCf(errdefs.ErrNotFound, "state: command %s", r.ID)
-	//}
-
 	resp := &taskapi.StateResponse{
 		ID:     r.ID,
 		Bundle: s.bundle,
@@ -350,16 +395,10 @@ func (s *Service) Delete(ctx context.Context, r *taskapi.DeleteRequest) (*taskap
 		delete(s.pids, r.ID)
 	}
 	if _, ok := s.commands[r.ID]; ok {
-		//s.logMsg("closing pio")
-		//if c.pio != nil {
-		//	c.pio.Close()
-		//}
 		delete(s.commands, r.ID)
 	}
 
 	if r.ID == s.id {
-		s.logMsg(fmt.Sprintf("delete: removing bundle %s", s.bundle))
-		os.RemoveAll(s.bundle)
 		close(s.exitCh)
 	}
 
@@ -438,7 +477,14 @@ func (s *Service) ResizePty(ctx context.Context, r *taskapi.ResizePtyRequest) (*
 }
 
 func (s *Service) CloseIO(ctx context.Context, r *taskapi.CloseIORequest) (*ptypes.Empty, error) {
-	return empty, errdefs.ErrNotImplemented
+	if c, ok := s.commands[r.ID]; ok {
+		if c.pio != nil {
+			if err := c.pio.Close(); err != nil {
+				return empty, errdefs.ToGRPC(err)
+			}
+		}
+	}
+	return empty, nil
 }
 
 func (s *Service) Update(ctx context.Context, r *taskapi.UpdateTaskRequest) (*ptypes.Empty, error) {
@@ -485,6 +531,10 @@ func (s *Service) Shutdown(ctx context.Context, r *taskapi.ShutdownRequest) (*pt
 }
 
 func (s *Service) Cleanup(ctx context.Context) (*taskapi.DeleteResponse, error) {
+	s.logMsg(fmt.Sprintf("cleanup: unmounting rootfs"))
+	if err := mount.UnmountAll(s.rootfs, 0); err != nil {
+		return nil, errdefs.ToGRPC(errors.Wrapf(err, "error cleaning up rootfs mount %s", s.rootfs))
+	}
 	s.logMsg(fmt.Sprintf("cleanup: removing bundle %s", s.bundle))
 	_ = os.RemoveAll(s.bundle)
 	return &taskapi.DeleteResponse{
@@ -565,6 +615,16 @@ func (s *Service) exitHandler(id string, pid int) error {
 			err = eErr
 		}
 		s.logMsg(fmt.Sprintf("process exit: id=%s pid=%d", id, pid))
+		if c, ok := s.commands[id]; ok {
+			s.logMsg("closing pio")
+			if c.pio != nil {
+				c.pio.Close()
+			}
+			if mErr := mount.UnmountAll(s.rootfs, 0); mErr != nil {
+				err = mErr
+			}
+		}
+		delete(s.pids, id)
 		s.exitCh <- &commandEvent{
 			id:     id,
 			pid:    pid,
@@ -572,13 +632,6 @@ func (s *Service) exitHandler(id string, pid int) error {
 			exited: time.Now(),
 			err:    err,
 		}
-		if c, ok := s.commands[id]; ok {
-			s.logMsg("closing pio")
-			if c.pio != nil {
-				c.pio.Close()
-			}
-		}
-		delete(s.pids, id)
 		s.logMsg(fmt.Sprintf("published event: id=%s pid=%d", id, pid))
 	}()
 	return nil
@@ -616,6 +669,28 @@ func copyPipe(dst io.WriteCloser, src io.ReadCloser, wg *sync.WaitGroup) {
 		dst.Close()
 		wg.Done()
 	}()
+}
+
+func resolveRootfsCommand(rootfs, cmd string, env []string) (string, error) {
+	envPath := []string{}
+	for _, e := range env {
+		p := strings.Split(e, "=")
+		if len(p) != 2 {
+			continue
+		}
+		if v := strings.ToUpper(p[0]); v == "PATH" {
+			envPath = strings.Split(p[1], ":")
+			break
+		}
+	}
+	for _, p := range envPath {
+		cmdPath := filepath.Join(rootfs, p, cmd)
+		if v, _ := os.Stat(cmdPath); v != nil {
+			return cmdPath, nil
+		}
+	}
+
+	return "", fmt.Errorf("command not found: %s", cmd)
 }
 
 func getTopic(ctx context.Context, e interface{}) string {
