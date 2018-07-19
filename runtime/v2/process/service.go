@@ -39,13 +39,14 @@ import (
 	"github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/v2/shim"
 	taskapi "github.com/containerd/containerd/runtime/v2/task"
+	runc "github.com/containerd/go-runc"
 	ptypes "github.com/gogo/protobuf/types"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
-var _ = (taskapi.TaskService)(&Service{})
+var _ = (shim.Shim)(&Service{})
 
 var (
 	ErrNotSupported = errors.New("operation not supported")
@@ -54,41 +55,38 @@ var (
 
 type command struct {
 	*exec.Cmd
+
+	id     string
 	stdin  string
 	stdout string
 	stderr string
 	// set on Create()
 	mounts []*mount.Mount
 	// set on Start()
-	pio *pipeIO
+	pio        *pipeIO
+	pid        int
+	exit       chan struct{}
+	exitedAt   time.Time
+	exitStatus int
 }
 
-type commandStart struct {
-	id  string
-	pid int
-}
-
-type commandEvent struct {
-	id     string
-	pid    int
-	status uint32
-	exited time.Time
-	err    error
+func (c *command) setExited(e runc.Exit) {
+	c.exitedAt = e.Timestamp
+	c.exitStatus = e.Status
+	close(c.exit)
 }
 
 type Service struct {
 	id      string
 	context context.Context
 	events  chan interface{}
-	exitCh  chan *commandEvent
+	exits   chan runc.Exit
 	mu      sync.Mutex
 
 	bundle   string
 	rootfs   string
 	commands map[string]*command
-	pids     map[string]int
-	pidCh    chan *commandStart
-	errCh    chan error
+	pid      int
 }
 
 var (
@@ -100,11 +98,8 @@ func New(ctx context.Context, id string, publisher events.Publisher) (shim.Shim,
 		id:       id,
 		context:  ctx,
 		events:   make(chan interface{}, 128),
-		exitCh:   make(chan *commandEvent),
+		exits:    shim.Default.Subscribe(),
 		commands: make(map[string]*command),
-		pids:     make(map[string]int),
-		pidCh:    make(chan *commandStart),
-		errCh:    make(chan error),
 	}
 	go s.forward(publisher)
 	return s, nil
@@ -168,16 +163,16 @@ func (s *Service) StartShim(ctx context.Context, id, containerdBinary, container
 
 	cmd.ExtraFiles = append(cmd.ExtraFiles, f)
 
-	if err := cmd.Start(); err != nil {
+	ec, err := shim.Default.Start(cmd)
+	if err != nil {
 		return "", err
 	}
 	defer func() {
 		if err != nil {
 			cmd.Process.Kill()
+			shim.Default.Wait(cmd, ec)
 		}
 	}()
-	// make sure to wait after start
-	go cmd.Wait()
 	if err := shim.WritePidFile("shim.pid", cmd.Process.Pid); err != nil {
 		return "", err
 	}
@@ -187,23 +182,13 @@ func (s *Service) StartShim(ctx context.Context, id, containerdBinary, container
 	if err := shim.SetScore(cmd.Process.Pid); err != nil {
 		return "", errors.Wrap(err, "failed to set OOM Score on shim")
 	}
-	go s.errorHandler()
-	go s.processExits()
 	return address, nil
 }
 
 func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (_ *taskapi.CreateTaskResponse, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	//var opts RuntimeOptions
-	//if r.Options != nil {
-	//	v, err := typeurl.UnmarshalAny(r.Options)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	opts = *v.(*RuntimeOptions)
-	//}
+	go s.processExits()
 
 	rootfs := filepath.Join(r.Bundle, "rootfs")
 
@@ -270,12 +255,13 @@ func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (_ *
 	c.Env = spec.Process.Env
 	c.SysProcAttr = getSysProcAttr()
 	sc := &command{
-		c,
-		r.Stdin,
-		r.Stdout,
-		r.Stderr,
-		mounts,
-		nil,
+		Cmd:    c,
+		id:     r.ID,
+		stdin:  r.Stdin,
+		stdout: r.Stdout,
+		stderr: r.Stderr,
+		mounts: mounts,
+		exit:   make(chan struct{}),
 	}
 	s.commands[r.ID] = sc
 
@@ -315,24 +301,16 @@ func (s *Service) Start(ctx context.Context, r *taskapi.StartRequest) (_ *taskap
 	}()
 
 	s.logMsg("starting process")
-	if err := c.Start(); err != nil {
+	if _, err := shim.Default.Start(c.Cmd); err != nil {
 		return nil, errdefs.ToGRPC(err)
 	}
+	c.pio.out.w.Close()
+	c.pio.err.w.Close()
 
 	s.logMsg(fmt.Sprintf("process started: pid=%d", c.Process.Pid))
 
-	s.pids[r.ID] = c.Process.Pid
-	if err := s.monitor(r.ID, c.Process.Pid); err != nil {
-		return nil, errdefs.ToGRPC(err)
-	}
-
-	s.events <- &eventstypes.TaskCreate{
-		ContainerID: s.id,
-		Bundle:      s.bundle,
-		Pid:         uint32(c.Process.Pid),
-	}
-
-	s.logMsg("event published TaskCreate")
+	c.pid = c.Process.Pid
+	s.pid = c.Process.Pid
 
 	return &taskapi.StartResponse{
 		Pid: uint32(c.Process.Pid),
@@ -343,14 +321,18 @@ func (s *Service) State(ctx context.Context, r *taskapi.StateRequest) (*taskapi.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	pid, _ := s.pids[r.ID]
+	c := s.commands[r.ID]
+	if c == nil {
+		return nil, errdefs.ToGRPCf(errdefs.ErrNotFound, "delete: command %s", r.ID)
+	}
+	pid := c.pid
+
 	resp := &taskapi.StateResponse{
 		ID:     r.ID,
 		Bundle: s.bundle,
 		Pid:    uint32(pid),
 	}
 
-	exitCode := uint32(0)
 	status := task.StatusStopped
 	if pid != 0 {
 		p, _ := os.FindProcess(pid)
@@ -362,7 +344,7 @@ func (s *Service) State(ctx context.Context, r *taskapi.StateRequest) (*taskapi.
 		}
 	}
 
-	resp.ExitStatus = exitCode
+	resp.ExitStatus = uint32(c.exitStatus)
 	resp.Status = status
 
 	return resp, nil
@@ -372,43 +354,45 @@ func (s *Service) Delete(ctx context.Context, r *taskapi.DeleteRequest) (*taskap
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	pid, ok := s.pids[r.ID]
-	if ok {
-		s.logMsg(fmt.Sprintf("delete: finding pid=%d", pid))
-		p, err := os.FindProcess(pid)
-		if err != nil {
-			return nil, errors.Wrapf(errdefs.ErrNotFound, "delete: pid %d", pid)
-		}
-		s.logMsg(fmt.Sprintf("delete: killing pid=%d", pid))
-		statusErr := processRunning(pid)
-		if statusErr == nil {
-			if err := p.Kill(); err != nil {
-				return nil, errdefs.ToGRPC(err)
-			}
-		}
-		delete(s.pids, r.ID)
+	c := s.commands[r.ID]
+	if c == nil {
+		return nil, errdefs.ToGRPCf(errdefs.ErrNotFound, "delete: command %s", r.ID)
 	}
-	if _, ok := s.commands[r.ID]; ok {
-		delete(s.commands, r.ID)
+	pid := c.pid
+	s.logMsg(fmt.Sprintf("delete: finding pid=%d", pid))
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return nil, errors.Wrapf(errdefs.ErrNotFound, "delete: pid %d", pid)
+	}
+	s.logMsg(fmt.Sprintf("delete: killing pid=%d", pid))
+	statusErr := processRunning(pid)
+	if statusErr == nil {
+		if err := p.Kill(); err != nil {
+			return nil, errdefs.ToGRPC(err)
+		}
+	}
+	if c.pio != nil {
+		c.pio.Close()
+	}
+	if err := mount.UnmountAll(s.rootfs, 0); err != nil {
+		return nil, err
 	}
 
-	if r.ID == s.id {
-		close(s.exitCh)
-	}
+	delete(s.commands, r.ID)
 
 	s.logMsg("delete: complete")
 
 	return &taskapi.DeleteResponse{
 		ExitedAt: time.Now(),
-		Pid:      uint32(pid),
+		Pid:      uint32(c.pid),
 	}, nil
 }
 
 func (s *Service) Pids(ctx context.Context, r *taskapi.PidsRequest) (*taskapi.PidsResponse, error) {
 	info := []*task.ProcessInfo{}
-	for _, pid := range s.pids {
+	for _, c := range s.commands {
 		info = append(info, &task.ProcessInfo{
-			Pid: uint32(pid),
+			Pid: uint32(c.pid),
 		})
 	}
 	return &taskapi.PidsResponse{
@@ -433,10 +417,10 @@ func (s *Service) Kill(ctx context.Context, r *taskapi.KillRequest) (*ptypes.Emp
 	defer s.mu.Unlock()
 	sig := syscall.Signal(r.Signal)
 	if r.All {
-		for _, pid := range s.pids {
-			p, err := os.FindProcess(pid)
+		for _, c := range s.commands {
+			p, err := os.FindProcess(c.pid)
 			if err != nil {
-				logrus.Warnf("unable to find process %d", pid)
+				logrus.Warnf("unable to find process %d", c.pid)
 				continue
 			}
 			if err := p.Signal(sig); err != nil {
@@ -444,19 +428,16 @@ func (s *Service) Kill(ctx context.Context, r *taskapi.KillRequest) (*ptypes.Emp
 			}
 		}
 	} else {
-		id := r.ID
-		if id == "" {
-			id = s.id
+		c := s.commands[r.ID]
+		if c == nil {
+			return nil, errdefs.ToGRPCf(errdefs.ErrNotFound, "kill: command %s", r.ID)
 		}
-		pid, ok := s.pids[id]
-		if ok {
-			p, err := os.FindProcess(pid)
-			if err != nil {
-				return empty, errdefs.ToGRPC(err)
-			}
-			if err := p.Signal(sig); err != nil {
-				return empty, errdefs.ToGRPC(err)
-			}
+		p, err := os.FindProcess(c.pid)
+		if err != nil {
+			return empty, errdefs.ToGRPC(err)
+		}
+		if err := p.Signal(sig); err != nil {
+			return empty, errdefs.ToGRPC(err)
 		}
 	}
 	return empty, nil
@@ -486,19 +467,18 @@ func (s *Service) Update(ctx context.Context, r *taskapi.UpdateTaskRequest) (*pt
 }
 
 func (s *Service) Wait(ctx context.Context, r *taskapi.WaitRequest) (*taskapi.WaitResponse, error) {
-	if _, ok := s.commands[r.ID]; !ok {
+	c, ok := s.commands[r.ID]
+	if !ok {
 		return nil, errdefs.ToGRPCf(errdefs.ErrNotFound, "wait: command %s", s.id)
 	}
 
 	s.logMsg("waiting for command exit event")
 
-	evt := <-s.exitCh
-
-	s.logMsg(fmt.Sprintf("wait complete: %+v", evt))
+	<-c.exit
 
 	return &taskapi.WaitResponse{
-		ExitStatus: evt.status,
-		ExitedAt:   evt.exited,
+		ExitStatus: uint32(c.exitStatus),
+		ExitedAt:   c.exitedAt,
 	}, nil
 }
 
@@ -508,13 +488,9 @@ func (s *Service) Stats(ctx context.Context, r *taskapi.StatsRequest) (*taskapi.
 
 // Connect returns shim information such as the shim's pid
 func (s *Service) Connect(ctx context.Context, r *taskapi.ConnectRequest) (*taskapi.ConnectResponse, error) {
-	pid, ok := s.pids[s.id]
-	if !ok {
-		return nil, errdefs.ToGRPCf(errdefs.ErrNotFound, "command %s", s.id)
-	}
 	return &taskapi.ConnectResponse{
 		ShimPid: uint32(os.Getpid()),
-		TaskPid: uint32(pid),
+		TaskPid: uint32(s.pid),
 	}, nil
 }
 
@@ -527,12 +503,11 @@ func (s *Service) Shutdown(ctx context.Context, r *taskapi.ShutdownRequest) (*pt
 func (s *Service) Cleanup(ctx context.Context) (*taskapi.DeleteResponse, error) {
 	s.logMsg(fmt.Sprintf("cleanup: unmounting rootfs"))
 	if err := mount.UnmountAll(s.rootfs, 0); err != nil {
-		return nil, errdefs.ToGRPC(errors.Wrapf(err, "error cleaning up rootfs mount %s", s.rootfs))
+		logrus.WithError(err).Warn("failed to cleanup rootfs mount")
 	}
-	s.logMsg(fmt.Sprintf("cleanup: removing bundle %s", s.bundle))
-	_ = os.RemoveAll(s.bundle)
 	return &taskapi.DeleteResponse{
-		ExitedAt: time.Now(),
+		ExitedAt:   time.Now(),
+		ExitStatus: 128 + 9, // sigkill
 	}, nil
 }
 
@@ -544,75 +519,24 @@ func (s *Service) forward(publisher events.Publisher) {
 	}
 }
 
-func (s *Service) errorHandler() {
-	for err := range s.errCh {
-		s.logMsg(fmt.Sprintf("shim error: %s", err))
-	}
-}
-
-// monitor starts an exitHandler for a process upon start
-func (s *Service) monitor(id string, pid int) error {
-	s.logMsg(fmt.Sprintf("monitor: starting exit handler: id=%s pid=%d", id, pid))
-	if err := s.exitHandler(id, pid); err != nil {
-		return err
-	}
-	return nil
-}
-
-// exitHandler waits for the process to exit to publish exit events
-func (s *Service) exitHandler(id string, pid int) error {
-	s.logMsg(fmt.Sprintf("waitForExit: id=%s pid=%d", id, pid))
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-	go func() {
-		state, err := p.Wait()
-		e, eErr := getExitCode(state)
-		if err == nil {
-			err = eErr
-		}
-		s.logMsg(fmt.Sprintf("process exit: id=%s pid=%d", id, pid))
-		if c, ok := s.commands[id]; ok {
-			s.logMsg("closing pio")
-			if c.pio != nil {
-				c.pio.Close()
-			}
-			if mErr := mount.UnmountAll(s.rootfs, 0); mErr != nil {
-				err = mErr
-			}
-		}
-		delete(s.pids, id)
-		s.exitCh <- &commandEvent{
-			id:     id,
-			pid:    pid,
-			status: e,
-			exited: time.Now(),
-			err:    err,
-		}
-		s.logMsg(fmt.Sprintf("published event: id=%s pid=%d", id, pid))
-	}()
-	return nil
-}
-
 func (s *Service) processExits() {
-	for e := range s.exitCh {
+	for e := range s.exits {
 		s.logMsg(fmt.Sprintf("exit event: %+v", e))
 		s.checkCommand(e)
 	}
 }
 
-func (s *Service) checkCommand(e *commandEvent) {
-	for id, _ := range s.commands {
-		s.logMsg(fmt.Sprintf("checkCommand: id=%s", id))
-		if id == e.id {
-			s.logMsg(fmt.Sprintf("publishing TaskExit id=%s", e.id))
+func (s *Service) checkCommand(e runc.Exit) {
+	for _, c := range s.commands {
+		if c.pid == e.Pid {
+			s.logMsg(fmt.Sprintf("publishing TaskExit id=%s", c.id))
+			c.setExited(e)
 			s.events <- &eventstypes.TaskExit{
 				ContainerID: s.id,
-				ID:          e.id,
-				Pid:         uint32(e.pid),
-				ExitStatus:  e.status,
-				ExitedAt:    e.exited,
+				ID:          c.id,
+				Pid:         uint32(e.Pid),
+				ExitStatus:  uint32(e.Status),
+				ExitedAt:    e.Timestamp,
 			}
 			return
 		}
