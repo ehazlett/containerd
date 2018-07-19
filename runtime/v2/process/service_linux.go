@@ -38,3 +38,7 @@ func getSysProcAttr() *syscall.SysProcAttr {
 		Setpgid: true,
 	}
 }
+
+func processRunning(pid int) error {
+	return syscall.Kill(pid, syscall.Signal(0))
+}

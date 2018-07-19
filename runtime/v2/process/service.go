@@ -268,9 +268,7 @@ func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (_ *
 	c := exec.Command(cmd, args...)
 	c.Dir = rootfs
 	c.Env = spec.Process.Env
-	c.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-	}
+	c.SysProcAttr = getSysProcAttr()
 	sc := &command{
 		c,
 		r.Stdin,
@@ -357,7 +355,7 @@ func (s *Service) State(ctx context.Context, r *taskapi.StateRequest) (*taskapi.
 	if pid != 0 {
 		p, _ := os.FindProcess(pid)
 		if p != nil {
-			statusErr := syscall.Kill(pid, syscall.Signal(0))
+			statusErr := processRunning(pid)
 			if statusErr == nil {
 				status = task.StatusRunning
 			}
@@ -382,7 +380,7 @@ func (s *Service) Delete(ctx context.Context, r *taskapi.DeleteRequest) (*taskap
 			return nil, errors.Wrapf(errdefs.ErrNotFound, "delete: pid %d", pid)
 		}
 		s.logMsg(fmt.Sprintf("delete: killing pid=%d", pid))
-		statusErr := syscall.Kill(pid, syscall.Signal(0))
+		statusErr := processRunning(pid)
 		if statusErr == nil {
 			if err := p.Kill(); err != nil {
 				return nil, errdefs.ToGRPC(err)

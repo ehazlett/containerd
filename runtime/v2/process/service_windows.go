@@ -27,12 +27,19 @@ import (
 func getExitCode(p *os.ProcessState) (uint32, error) {
 	ws, ok := p.Sys().(syscall.WaitStatus)
 	if !ok {
-		return -1, fmt.Errorf("unable to determine exit code")
+		return 0, fmt.Errorf("unable to determine exit code")
 	}
 
 	return ws.ExitCode, nil
 }
 
 func getSysProcAttr() *syscall.SysProcAttr {
+	return nil
+}
+
+func processRunning(pid int) error {
+	if _, err := os.FindProcess(pid); err != nil {
+		return err
+	}
 	return nil
 }

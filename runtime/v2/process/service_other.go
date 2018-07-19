@@ -32,3 +32,10 @@ func getExitCode(p *os.ProcessState) (uint32, error) {
 func getSysProcAttr() *syscall.SysProcAttr {
 	return nil
 }
+
+func processRunning(pid int) error {
+	if _, err := os.FindProcess(pid); err != nil {
+		return err
+	}
+	return nil
+}
