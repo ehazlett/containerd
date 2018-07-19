@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -40,7 +39,6 @@ import (
 	"github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/v2/shim"
 	taskapi "github.com/containerd/containerd/runtime/v2/task"
-	"github.com/containerd/fifo"
 	ptypes "github.com/gogo/protobuf/types"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
@@ -144,9 +142,7 @@ func newCommand(ctx context.Context, containerdBinary, containerdAddress string)
 	cmd.Env = append(os.Environ(), "GOMAXPROCS=2")
 	cmd.Stdout = logfile
 	cmd.Stderr = logfile
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-	}
+	cmd.SysProcAttr = getSysProcAttr()
 	return cmd, nil
 }
 
@@ -304,7 +300,7 @@ func (s *Service) Start(ctx context.Context, r *taskapi.StartRequest) (_ *taskap
 	cwg.Add(1)
 	var ioErr error
 	go func() {
-		if err := s.setupIO(ctx, r.ID, c, cwg); err != nil {
+		if err := setupIO(ctx, r.ID, c, cwg); err != nil {
 			ioErr = err
 		}
 	}()
@@ -550,42 +546,6 @@ func (s *Service) forward(publisher events.Publisher) {
 	}
 }
 
-func (s *Service) setupIO(ctx context.Context, id string, c *command, cwg *sync.WaitGroup) error {
-	wg := &sync.WaitGroup{}
-	pio, err := NewIO()
-	if err != nil {
-		return err
-	}
-	c.pio = pio
-	s.logMsg("pio initialized")
-
-	if c.stdin != "" {
-		s.logMsg(fmt.Sprintf("configuring stdin: %s", c.stdin))
-		c.Stdin = pio.in.r
-		in, err := fifo.OpenFifo(ctx, c.stdin, syscall.O_RDONLY, 0)
-		if err != nil {
-			return err
-		}
-		go copyPipe(pio.Stdin(), in, wg)
-		s.logMsg("stdin: started copyPipe")
-	}
-	if c.stdout != "" {
-		s.logMsg(fmt.Sprintf("configuring stdout: %s", c.stdout))
-		c.Stdout = pio.out.w
-		outw, err := fifo.OpenFifo(ctx, c.stdout, syscall.O_WRONLY, 0)
-		if err != nil {
-			return err
-		}
-		go copyPipe(outw, pio.out.r, wg)
-		s.logMsg("stdout: started copyPipe")
-	}
-
-	cwg.Done()
-	wg.Wait()
-
-	return nil
-}
-
 func (s *Service) errorHandler() {
 	for err := range s.errCh {
 		s.logMsg(fmt.Sprintf("shim error: %s", err))
@@ -659,16 +619,6 @@ func (s *Service) checkCommand(e *commandEvent) {
 			return
 		}
 	}
-}
-
-func copyPipe(dst io.WriteCloser, src io.ReadCloser, wg *sync.WaitGroup) {
-	wg.Add(1)
-	go func() {
-		io.Copy(dst, src)
-		src.Close()
-		dst.Close()
-		wg.Done()
-	}()
 }
 
 func resolveRootfsCommand(rootfs, cmd string, env []string) (string, error) {

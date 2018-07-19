@@ -32,3 +32,7 @@ func getExitCode(p *os.ProcessState) (uint32, error) {
 
 	return ws.ExitCode, nil
 }
+
+func getSysProcAttr() *syscall.SysProcAttr {
+	return nil
+}
