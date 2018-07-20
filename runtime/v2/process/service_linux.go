@@ -19,9 +19,19 @@
 package process
 
 import (
+	"bufio"
 	"fmt"
+	"io/ioutil"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
+
+	"github.com/pkg/errors"
+)
+
+var (
+	ldConfPath = "/etc/ld.so.conf.d"
 )
 
 func getExitCode(p *os.ProcessState) (uint32, error) {
@@ -41,4 +51,93 @@ func getSysProcAttr() *syscall.SysProcAttr {
 
 func processRunning(pid int) error {
 	return syscall.Kill(pid, syscall.Signal(0))
+}
+
+func (s *Service) adaptCommandEnvironment(env []string) ([]string, error) {
+	updated := []string{}
+	ldPath := false
+
+	for _, e := range env {
+		p := strings.Split(e, "=")
+		if len(p) == 1 {
+			updated = append(updated, e)
+			continue
+		}
+		k := strings.ToUpper(p[0])
+		v := strings.Join(p[1:], "=")
+		res := ""
+		switch k {
+		case "PATH":
+			res = adaptRootfsPath(s.rootfs, v)
+		case "LD_LIBRARY_PATH":
+			// ignore adapting if present
+			ldPath = true
+		default:
+			res = v
+		}
+
+		updated = append(updated, k+"="+res)
+	}
+
+	// check if LD_LIBRARY_PATH was present; if not inject
+	if !ldPath {
+		r, err := resolveRootfsLDLibraryPath(s.rootfs)
+		if err != nil {
+			return nil, err
+		}
+		// add host
+		h, err := resolveRootfsLDLibraryPath("")
+		if err != nil {
+			return nil, err
+		}
+		if r != "" {
+			updated = append(updated, "LD_LIBRARY_PATH="+r+h)
+		}
+	}
+
+	return updated, nil
+}
+
+func adaptRootfsPath(rootfs, val string) string {
+	dirs := []string{}
+	p := strings.Split(val, ":")
+	for _, d := range p {
+		dirs = append(dirs, filepath.Join(rootfs, d))
+	}
+
+	return strings.Join(dirs, ":")
+}
+
+func resolveRootfsLDLibraryPath(rootfs string) (string, error) {
+	ldPath := filepath.Join(rootfs, ldConfPath)
+	if _, err := os.Stat(ldPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", errors.Wrapf(err, "config path not found for LD_LIBRARY_PATH: %s", ldPath)
+	}
+	updated := []string{}
+	confs, err := ioutil.ReadDir(ldPath)
+	if err != nil {
+		return "", errors.Wrapf(err, "error reading LD_LIBRARY_PATH conf dir: %s", ldPath)
+	}
+	for _, c := range confs {
+		config := filepath.Join(ldPath, c.Name())
+		f, err := os.Open(config)
+		if err != nil {
+			return "", errors.Wrapf(err, "error reading LD_LIBRARY_PATH conf dir: %s", config)
+		}
+		defer f.Close()
+		s := bufio.NewScanner(f)
+		for s.Scan() {
+			v := s.Text()
+			// skip comments
+			if strings.Index(v, "#") == 0 {
+				continue
+			}
+			updated = append(updated, filepath.Join(rootfs, v))
+		}
+	}
+
+	return strings.Join(updated, ":"), nil
 }

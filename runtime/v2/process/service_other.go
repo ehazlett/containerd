@@ -39,3 +39,7 @@ func processRunning(pid int) error {
 	}
 	return nil
 }
+
+func adaptCommandEnvironment(env []string) ([]string, error) {
+	return env, nil
+}

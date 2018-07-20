@@ -89,10 +89,6 @@ type Service struct {
 	pid      int
 }
 
-var (
-	logPath = filepath.Join("/tmp", "shim.log")
-)
-
 func New(ctx context.Context, id string, publisher events.Publisher) (shim.Shim, error) {
 	s := &Service{
 		id:       id,
@@ -109,7 +105,8 @@ func (s *Service) logMsg(msg string) {
 	fmt.Println(msg)
 }
 
-func newCommand(ctx context.Context, containerdBinary, containerdAddress string) (*exec.Cmd, error) {
+func newCommand(ctx context.Context, id, containerdBinary, containerdAddress string) (*exec.Cmd, error) {
+	logPath := filepath.Join(os.TempDir(), id+"-shim.log")
 	os.Remove(logPath)
 	logfile, err := os.Create(logPath)
 	if err != nil {
@@ -142,7 +139,7 @@ func newCommand(ctx context.Context, containerdBinary, containerdAddress string)
 }
 
 func (s *Service) StartShim(ctx context.Context, id, containerdBinary, containerdAddress string) (string, error) {
-	cmd, err := newCommand(ctx, containerdBinary, containerdAddress)
+	cmd, err := newCommand(ctx, id, containerdBinary, containerdAddress)
 	if err != nil {
 		return "", err
 	}
@@ -248,11 +245,16 @@ func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (_ *
 		cmd = c
 	}
 
+	env, err := s.adaptCommandEnvironment(spec.Process.Env)
+	if err != nil {
+		return nil, errdefs.ToGRPC(err)
+	}
 	s.logMsg(fmt.Sprintf("cmd: %s", cmd))
+	s.logMsg(fmt.Sprintf("env: %+v", env))
 
 	c := exec.Command(cmd, args...)
 	c.Dir = rootfs
-	c.Env = spec.Process.Env
+	c.Env = env
 	c.SysProcAttr = getSysProcAttr()
 	sc := &command{
 		Cmd:    c,
@@ -560,6 +562,11 @@ func resolveRootfsCommand(rootfs, cmd string, env []string) (string, error) {
 		if v, _ := os.Stat(cmdPath); v != nil {
 			return cmdPath, nil
 		}
+	}
+	// lastly check in the base rootfs
+	cmdPath := filepath.Join(rootfs, cmd)
+	if v, _ := os.Stat(cmdPath); v != nil {
+		return cmdPath, nil
 	}
 
 	return "", fmt.Errorf("command not found: %s", cmd)
