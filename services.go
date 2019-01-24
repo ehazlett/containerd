@@ -22,6 +22,7 @@ import (
 	imagesapi "github.com/containerd/containerd/api/services/images/v1"
 	namespacesapi "github.com/containerd/containerd/api/services/namespaces/v1"
 	"github.com/containerd/containerd/api/services/tasks/v1"
+	"github.com/containerd/containerd/api/services/trace/v1"
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/images"
@@ -40,6 +41,7 @@ type services struct {
 	diffService    DiffService
 	eventService   EventService
 	leasesService  leases.Manager
+	traceService   trace.TraceClient
 }
 
 // ServicesOpt allows callers to set options on the services
@@ -108,5 +110,12 @@ func WithNamespaceService(namespaceService namespacesapi.NamespacesClient) Servi
 func WithLeasesService(leasesService leases.Manager) ServicesOpt {
 	return func(s *services) {
 		s.leasesService = leasesService
+	}
+}
+
+// WithTraceService sets the trace service.
+func WithTraceSErvice(traceService trace.TraceClient) ServicesOpt {
+	return func(s *services) {
+		s.traceService = traceService
 	}
 }

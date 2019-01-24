@@ -33,5 +33,6 @@ import (
 	_ "github.com/containerd/containerd/services/opt"
 	_ "github.com/containerd/containerd/services/snapshots"
 	_ "github.com/containerd/containerd/services/tasks"
+	_ "github.com/containerd/containerd/services/trace"
 	_ "github.com/containerd/containerd/services/version"
 )

@@ -4168,6 +4168,137 @@ file {
   syntax: "proto3"
 }
 file {
+  name: "github.com/containerd/containerd/api/services/trace/v1/trace.proto"
+  package: "containerd.services.trace.v1"
+  dependency: "gogoproto/gogo.proto"
+  message_type {
+    name: "KProbeConfig"
+    field {
+      name: "function_name"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "functionName"
+    }
+  }
+  message_type {
+    name: "UProbeConfig"
+    field {
+      name: "name"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "name"
+    }
+    field {
+      name: "symbol"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "symbol"
+    }
+  }
+  message_type {
+    name: "ProbeRequest"
+    field {
+      name: "id"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      options {
+        65004: "ID"
+      }
+      json_name: "id"
+    }
+    field {
+      name: "source"
+      number: 2
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "source"
+    }
+    field {
+      name: "kprobe_config"
+      number: 3
+      label: LABEL_OPTIONAL
+      type: TYPE_MESSAGE
+      type_name: ".containerd.services.trace.v1.KProbeConfig"
+      oneof_index: 0
+      json_name: "kprobeConfig"
+    }
+    field {
+      name: "uprobe_config"
+      number: 4
+      label: LABEL_OPTIONAL
+      type: TYPE_MESSAGE
+      type_name: ".containerd.services.trace.v1.UProbeConfig"
+      oneof_index: 0
+      json_name: "uprobeConfig"
+    }
+    field {
+      name: "probe_name"
+      number: 5
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "probeName"
+    }
+    field {
+      name: "return_function_name"
+      number: 7
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      json_name: "returnFunctionName"
+    }
+    field {
+      name: "table_id"
+      number: 8
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      options {
+        65004: "TableID"
+      }
+      json_name: "tableId"
+    }
+    field {
+      name: "container_id"
+      number: 9
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      options {
+        65004: "ContainerID"
+      }
+      json_name: "containerId"
+    }
+    oneof_decl {
+      name: "probe_config"
+    }
+  }
+  message_type {
+    name: "ProbeResponse"
+    field {
+      name: "data"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_BYTES
+      json_name: "data"
+    }
+  }
+  service {
+    name: "Trace"
+    method {
+      name: "Probe"
+      input_type: ".containerd.services.trace.v1.ProbeRequest"
+      output_type: ".containerd.services.trace.v1.ProbeResponse"
+      server_streaming: true
+    }
+  }
+  options {
+    go_package: "github.com/containerd/containerd/api/services/trace/v1;trace"
+  }
+  weak_dependency: 0
+  syntax: "proto3"
+}
+file {
   name: "github.com/containerd/containerd/api/services/version/v1/version.proto"
   package: "containerd.services.version.v1"
   dependency: "google/protobuf/empty.proto"

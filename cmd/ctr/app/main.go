@@ -32,6 +32,7 @@ import (
 	"github.com/containerd/containerd/cmd/ctr/commands/run"
 	"github.com/containerd/containerd/cmd/ctr/commands/snapshots"
 	"github.com/containerd/containerd/cmd/ctr/commands/tasks"
+	"github.com/containerd/containerd/cmd/ctr/commands/trace"
 	versionCmd "github.com/containerd/containerd/cmd/ctr/commands/version"
 	"github.com/containerd/containerd/defaults"
 	"github.com/containerd/containerd/namespaces"
@@ -104,6 +105,7 @@ containerd CLI
 		run.Command,
 		snapshots.Command,
 		tasks.Command,
+		trace.Command,
 		install.Command,
 	}, extraCmds...)
 	app.Before = func(context *cli.Context) error {

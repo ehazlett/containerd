@@ -37,6 +37,7 @@ import (
 	namespacesapi "github.com/containerd/containerd/api/services/namespaces/v1"
 	snapshotsapi "github.com/containerd/containerd/api/services/snapshots/v1"
 	"github.com/containerd/containerd/api/services/tasks/v1"
+	traceapi "github.com/containerd/containerd/api/services/trace/v1"
 	versionservice "github.com/containerd/containerd/api/services/version/v1"
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/content"
@@ -710,6 +711,16 @@ func (c *Client) EventService() EventService {
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
 	return NewEventServiceFromClient(eventsapi.NewEventsClient(c.conn))
+}
+
+// TraceService returns the underlying trace service
+func (c *Client) TraceService() traceapi.TraceClient {
+	if c.traceService != nil {
+		return c.traceService
+	}
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	return traceapi.NewTraceClient(c.conn)
 }
 
 // VersionService returns the underlying VersionClient

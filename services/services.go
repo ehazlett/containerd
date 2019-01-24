@@ -33,4 +33,6 @@ const (
 	LeasesService = "leases-service"
 	// DiffService is id of diff service.
 	DiffService = "diff-service"
+	// TraceService is the id of the trace service.
+	TraceService = "trace-service"
 )
