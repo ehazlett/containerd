@@ -69,8 +69,8 @@ var kProbeCommand = cli.Command{
 	Usage: "start kprobe",
 	Flags: []cli.Flag{
 		cli.StringFlag{
-			Name:  "function-name",
-			Usage: "name of kernel function to trace",
+			Name:  "syscall",
+			Usage: "name of kernel syscall to trace",
 		},
 	},
 	Action: func(context *cli.Context) error {
@@ -87,13 +87,13 @@ var kProbeCommand = cli.Command{
 		defer cancel()
 
 		traceService := client.TraceService()
-		functionName := context.String("function-name")
+		syscall := context.String("syscall")
 		probeRequest := &api.ProbeRequest{
 			ID:     id,
 			Source: string(srcData),
 			ProbeConfig: &api.ProbeRequest_KprobeConfig{
 				KprobeConfig: &api.KProbeConfig{
-					FunctionName: functionName,
+					Syscall: syscall,
 				},
 			},
 			ProbeName:          context.GlobalString("probe-name"),

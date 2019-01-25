@@ -70,6 +70,8 @@ func (s *service) Register(server *grpc.Server) error {
 func (s *service) Probe(req *api.ProbeRequest, srv api.Trace_ProbeServer) error {
 	m := bpf.NewModule(req.Source, []string{})
 
+	// TODO: defer func to Close module.  currently if the Load or Attach fails
+	// a device busy is reported until the daemon is restarted
 	probeConfig := req.GetProbeConfig()
 	switch t := probeConfig.(type) {
 	case *api.ProbeRequest_KprobeConfig:
@@ -77,10 +79,9 @@ func (s *service) Probe(req *api.ProbeRequest, srv api.Trace_ProbeServer) error 
 		if err != nil {
 			return errors.Wrapf(err, "error loading kprobe for %s", req.ProbeName)
 		}
-		functionName := t.KprobeConfig.FunctionName
-		syscallName := bpf.GetSyscallFnName(functionName)
+		syscallName := t.KprobeConfig.Syscall
 		if err := m.AttachKprobe(syscallName, kprobe); err != nil {
-			return errors.Wrapf(err, "error attaching to syscall %s", functionName)
+			return errors.Wrapf(err, "error attaching to syscall %s", syscallName)
 		}
 		if r := req.ReturnFunctionName; r != "" {
 			returnProbe, err := m.LoadKprobe(r)
@@ -88,7 +89,7 @@ func (s *service) Probe(req *api.ProbeRequest, srv api.Trace_ProbeServer) error 
 				return err
 			}
 			if err := m.AttachKretprobe(syscallName, returnProbe); err != nil {
-				return errors.Wrapf(err, "error attaching return probe %s syscall %s", r, functionName)
+				return errors.Wrapf(err, "error attaching return probe %s syscall %s", r, syscallName)
 			}
 		}
 	case *api.ProbeRequest_UprobeConfig:

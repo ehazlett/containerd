@@ -4175,11 +4175,11 @@ file {
   message_type {
     name: "KProbeConfig"
     field {
-      name: "function_name"
+      name: "syscall"
       number: 1
       label: LABEL_OPTIONAL
       type: TYPE_STRING
-      json_name: "functionName"
+      json_name: "syscall"
     }
   }
   message_type {
