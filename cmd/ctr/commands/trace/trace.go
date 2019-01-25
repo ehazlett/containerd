@@ -119,15 +119,16 @@ var kProbeCommand = cli.Command{
 					logrus.Fatal(err)
 				}
 
-				// TODO: this is just an example.  a "real" client would
-				// do this processing for a specific trace; here we just
-				// print raw data
-				evt, err := processKprobeData(resp.Data)
-				if err != nil {
-					logrus.Fatal(err)
-				}
+				//// TODO: this is just an example.  a "real" client would
+				//// do this processing for a specific trace; here we just
+				//// print raw data
+				//evt, err := processKprobeData(resp.Data)
+				//if err != nil {
+				//	logrus.Fatal(err)
+				//}
 
-				fmt.Printf("uid %d gid %d pid %d called fchownat on %s (return value: %d)\n", evt.Uid, evt.Gid, evt.Pid, evt.Filename, evt.ReturnValue)
+				//fmt.Printf("uid %d gid %d pid %d called fchownat on %s (return value: %d)\n", evt.Uid, evt.Gid, evt.Pid, evt.Filename, evt.ReturnValue)
+				fmt.Printf("%s\n", string(resp.Data))
 			}
 		}()
 

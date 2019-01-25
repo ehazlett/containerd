@@ -2,12 +2,14 @@ syntax = "proto3";
 
 package containerd.services.trace.v1;
 
+import "google/protobuf/empty.proto";
 import weak "gogoproto/gogo.proto";
 
 option go_package = "github.com/containerd/containerd/api/services/trace/v1;trace";
 
 service Trace {
 	rpc Probe(ProbeRequest) returns (stream ProbeResponse);
+        rpc Unload(UnloadRequest) returns (google.protobuf.Empty);
 }
 
 message KProbeConfig {
@@ -34,4 +36,8 @@ message ProbeRequest {
 
 message ProbeResponse {
         bytes data = 1;
+}
+
+message UnloadRequest {
+        string id = 1 [(gogoproto.customname) = "ID"];
 }

@@ -17,10 +17,13 @@
 package trace
 
 import (
+	"context"
 	"fmt"
+	"sync"
 
 	api "github.com/containerd/containerd/api/services/trace/v1"
 	"github.com/containerd/containerd/plugin"
+	ptypes "github.com/gogo/protobuf/types"
 	bpf "github.com/iovisor/gobpf/bcc"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -30,6 +33,12 @@ import (
 var (
 	_ = (api.TraceServer)(&service{})
 )
+
+type module struct {
+	m       *bpf.Module
+	perfMap *bpf.PerfMap
+	ch      chan []byte
+}
 
 func init() {
 	plugin.Register(&plugin.Registration{
@@ -41,10 +50,16 @@ func init() {
 	})
 }
 
-type service struct{}
+type service struct {
+	mu     *sync.Mutex
+	probes map[string]*module
+}
 
 func newService() (*service, error) {
-	return &service{}, nil
+	return &service{
+		mu:     &sync.Mutex{},
+		probes: make(map[string]*module),
+	}, nil
 }
 
 func (s *service) Register(server *grpc.Server) error {
@@ -108,29 +123,51 @@ func (s *service) Probe(req *api.ProbeRequest, srv api.Trace_ProbeServer) error 
 		return errors.Wrap(err, "error initializing perf map")
 	}
 
-	doneCh := make(chan bool)
-
+	doneCh := make(chan bool, 1)
 	go func() {
-		// cleanup
-		defer func() {
-			perfMap.Stop()
-			m.Close()
-			doneCh <- true
-		}()
-
+		var err error
 		for {
 			data := <-ch
-			if err := srv.Send(&api.ProbeResponse{
+			err = srv.Send(&api.ProbeResponse{
 				Data: data,
-			}); err != nil {
+			})
+			if err != nil {
 				logrus.Errorf("error sending trace data to client: %s", err)
 				return
 			}
 		}
 	}()
 
+	s.mu.Lock()
+	s.probes[req.ID] = &module{
+		m:       m,
+		perfMap: perfMap,
+		ch:      ch,
+	}
+
 	perfMap.Start()
+	s.mu.Unlock()
+
 	<-doneCh
 
 	return nil
+}
+
+func (s *service) Unload(ctx context.Context, req *api.UnloadRequest) (*ptypes.Empty, error) {
+	logrus.WithField("id", req.ID).Debug("unloading trace")
+	s.unloadModule(req.ID)
+	return &ptypes.Empty{}, nil
+}
+
+func (s *service) unloadModule(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if mod, ok := s.probes[id]; ok {
+		mod.perfMap.Stop()
+		mod.m.Close()
+		close(mod.ch)
+		delete(s.probes, id)
+	}
+	logrus.WithField("id", id).Debug("unloaded trace")
 }

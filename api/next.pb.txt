@@ -4170,6 +4170,7 @@ file {
 file {
   name: "github.com/containerd/containerd/api/services/trace/v1/trace.proto"
   package: "containerd.services.trace.v1"
+  dependency: "google/protobuf/empty.proto"
   dependency: "gogoproto/gogo.proto"
   message_type {
     name: "KProbeConfig"
@@ -4283,6 +4284,19 @@ file {
       json_name: "data"
     }
   }
+  message_type {
+    name: "UnloadRequest"
+    field {
+      name: "id"
+      number: 1
+      label: LABEL_OPTIONAL
+      type: TYPE_STRING
+      options {
+        65004: "ID"
+      }
+      json_name: "id"
+    }
+  }
   service {
     name: "Trace"
     method {
@@ -4291,11 +4305,16 @@ file {
       output_type: ".containerd.services.trace.v1.ProbeResponse"
       server_streaming: true
     }
+    method {
+      name: "Unload"
+      input_type: ".containerd.services.trace.v1.UnloadRequest"
+      output_type: ".google.protobuf.Empty"
+    }
   }
   options {
     go_package: "github.com/containerd/containerd/api/services/trace/v1;trace"
   }
-  weak_dependency: 0
+  weak_dependency: 1
   syntax: "proto3"
 }
 file {
