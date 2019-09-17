@@ -34,16 +34,13 @@ jobs:
       run: |
         pushd ..; git clone https://github.com/containerd/project; popd
 
-    - name: Install
+    - name: Build
       run: |
         sudo PATH=$PATH GOPATH=$GOPATH script/setup/install-protobuf
         sudo chmod +x /usr/local/bin/protoc
         sudo chmod og+rx /usr/local/include/google /usr/local/include/google/protobuf /usr/local/include/google/protobuf/compiler
         sudo chmod -R og+r /usr/local/include/google/protobuf/
         protoc --version
-        go get -u github.com/vbatts/git-validation
-        go get -u github.com/kunalkushwaha/ltag
-        go get -u github.com/LK4D4/vndr
         if [ "$GOOS" = "linux" ]; then sudo PATH=$PATH GOPATH=$GOPATH script/setup/install-seccomp; fi
         if [ "$GOOS" = "linux" ]; then sudo PATH=$PATH GOPATH=$GOPATH script/setup/install-runc; fi
         if [ "$GOOS" = "linux" ]; then sudo PATH=$PATH GOPATH=$GOPATH script/setup/install-cni; fi
@@ -51,9 +48,9 @@ jobs:
         if [ "$GOOS" = "linux" ]; then wget https://github.com/checkpoint-restore/criu/archive/v3.12.tar.gz -O /tmp/criu.tar.gz ; fi
         if [ "$GOOS" = "linux" ]; then tar -C /tmp/ -zxf /tmp/criu.tar.gz ; fi
         if [ "$GOOS" = "linux" ]; then cd /tmp/criu-3.12 && sudo make install-criu ; fi
-
-    - name: Build
-      run: |
+        go get -u github.com/vbatts/git-validation
+        go get -u github.com/kunalkushwaha/ltag
+        go get -u github.com/LK4D4/vndr
         DCO_VERBOSITY=-q ../project/script/validate/dco
         ../project/script/validate/fileheader ../project/
         ../project/script/validate/vendor
