@@ -9,7 +9,7 @@ jobs:
 
     - name: OS Deps
       run: |
-        apt-get update && apt-get install -y \
+        sudo apt-get update && sudo apt-get install -y \
                 btrfs-tools \
                 libnl-3-dev \
                 libnet-dev \
