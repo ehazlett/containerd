@@ -9,11 +9,17 @@ jobs:
 
     - name: OS Deps
       run: |
-        apt-get update && apt-get install -y btrfs-tools
-        wget https://github.com/google/protobuf/releases/download/v3.1.0/protoc-3.1.0-linux-x86_64.zip -O /tmp/protoc-3.1.0-linux-x86_64.zip
-        unzip -o -d /tmp/protobuf /tmp/protoc-3.1.0-linux-x86_64.zip
-        export PATH=$PATH:/tmp/protobuf/bin/
-        go get -u github.com/vbatts/git-validation
+        apt-get update && apt-get install -y \
+                btrfs-tools \
+                libnl-3-dev \
+                libnet-dev \
+                protobuf-c-compiler \
+                python-minimal \
+                libcap-dev \
+                libaio-dev \
+                libprotobuf-c-dev \
+                libprotobuf-dev \
+                socat
 
     - name: Go 1.12
       uses: actions/setup-go@v1
@@ -21,17 +27,39 @@ jobs:
         go-version: 1.12
       id: go
 
-    - name: Checkout
+    - name: Checkout (containerd/containerd)
       uses: actions/checkout@v1
+
+    - name: Checkout (containerd/project)
+      run: |
+        pushd ..; git clone https://github.com/containerd/project; popd
+
+    - name: Install
+      run: |
+        sudo PATH=$PATH GOPATH=$GOPATH script/setup/install-protobuf
+        sudo chmod +x /usr/local/bin/protoc
+        sudo chmod og+rx /usr/local/include/google /usr/local/include/google/protobuf /usr/local/include/google/protobuf/compiler
+        sudo chmod -R og+r /usr/local/include/google/protobuf/
+        protoc --version
+        go get -u github.com/vbatts/git-validation
+        go get -u github.com/kunalkushwaha/ltag
+        go get -u github.com/LK4D4/vndr
+        if [ "$GOOS" = "linux" ]; then sudo PATH=$PATH GOPATH=$GOPATH script/setup/install-seccomp; fi
+        if [ "$GOOS" = "linux" ]; then sudo PATH=$PATH GOPATH=$GOPATH script/setup/install-runc; fi
+        if [ "$GOOS" = "linux" ]; then sudo PATH=$PATH GOPATH=$GOPATH script/setup/install-cni; fi
+        if [ "$GOOS" = "linux" ]; then sudo PATH=$PATH GOPATH=$GOPATH script/setup/install-critools; fi
+        if [ "$GOOS" = "linux" ]; then wget https://github.com/checkpoint-restore/criu/archive/v3.12.tar.gz -O /tmp/criu.tar.gz ; fi
+        if [ "$GOOS" = "linux" ]; then tar -C /tmp/ -zxf /tmp/criu.tar.gz ; fi
+        if [ "$GOOS" = "linux" ]; then cd /tmp/criu-3.12 && sudo make install-criu ; fi
 
     - name: Build
       run: |
-        make fmt
+        DCO_VERBOSITY=-q ../project/script/validate/dco
+        ../project/script/validate/fileheader ../project/
+        ../project/script/validate/vendor
+        GOOS=linux script/setup/install-dev-tools
+        go build -i .
+        make check
+        if [ "$GOOS" = "linux" ]; then make check-protos check-api-descriptors; fi
+        make build
         make binaries
-        make coverage
-        make dco
-        sudo PATH=$PATH GOPATH=$GOPATH make root-coverage
-
-    - name: Codecov
-      run: |
-        bash <(curl -s https://codecov.io/bash)
