@@ -35,7 +35,12 @@ jobs:
         pushd ..; git clone https://github.com/containerd/project; popd
 
     - name: Build
+      env:
+        GOOS: linux
       run: |
+        go get -u github.com/vbatts/git-validation
+        go get -u github.com/kunalkushwaha/ltag
+        go get -u github.com/LK4D4/vndr
         sudo PATH=$PATH GOPATH=$GOPATH script/setup/install-protobuf
         sudo chmod +x /usr/local/bin/protoc
         sudo chmod og+rx /usr/local/include/google /usr/local/include/google/protobuf /usr/local/include/google/protobuf/compiler
@@ -48,9 +53,6 @@ jobs:
         if [ "$GOOS" = "linux" ]; then wget https://github.com/checkpoint-restore/criu/archive/v3.12.tar.gz -O /tmp/criu.tar.gz ; fi
         if [ "$GOOS" = "linux" ]; then tar -C /tmp/ -zxf /tmp/criu.tar.gz ; fi
         if [ "$GOOS" = "linux" ]; then cd /tmp/criu-3.12 && sudo make install-criu ; fi
-        go get -u github.com/vbatts/git-validation
-        go get -u github.com/kunalkushwaha/ltag
-        go get -u github.com/LK4D4/vndr
         DCO_VERBOSITY=-q ../project/script/validate/dco
         ../project/script/validate/fileheader ../project/
         ../project/script/validate/vendor
