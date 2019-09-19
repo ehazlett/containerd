@@ -43,8 +43,9 @@ jobs:
     - name: Build
       env:
         GOOS: linux
-        GOPATH: /home/runner/work/go
+        GOPATH: /home/runner/work/containerd/go
       run: |
+        ls -lah /home/runner/work/containerd
         ls -lah .
         env
         echo $PWD
