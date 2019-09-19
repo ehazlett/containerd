@@ -38,6 +38,7 @@ jobs:
       with:
         repository: containerd/project
         path: go/src/github.com/containerd/project
+        ref: master
 
     - name: Build
       env:
