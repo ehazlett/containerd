@@ -29,19 +29,25 @@ jobs:
 
     - name: Checkout (containerd/containerd)
       uses: actions/checkout@v1
+      with:
+        fetch-depth: 1
+        path: go/src/github.com/containerd/containerd
 
     - name: Checkout (containerd/project)
-      run: |
-        pushd ..; git clone https://github.com/containerd/project; popd
+      uses: actions/checkout@v1
+      with:
+        repository: https://github.com/containerd/project
+        fetch-depth: 1
+        path: go/src/github.com/containerd/project
 
     - name: Build
       env:
         GOOS: linux
+        GOPATH: /home/runner/work/go
       run: |
         ls -lah .
         env
         echo $PWD
-        export GOPATH=$(go env GOPATH)
         go get -u github.com/vbatts/git-validation
         go get -u github.com/kunalkushwaha/ltag
         go get -u github.com/LK4D4/vndr
