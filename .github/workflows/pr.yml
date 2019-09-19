@@ -40,6 +40,8 @@ jobs:
       run: |
         ls -lah .
         env
+        echo $PWD
+        export GOPATH=$(go env GOPATH)
         go get -u github.com/vbatts/git-validation
         go get -u github.com/kunalkushwaha/ltag
         go get -u github.com/LK4D4/vndr
