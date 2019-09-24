@@ -46,9 +46,6 @@ jobs:
       run: |
         go version
         export PATH=$PATH:$GOPATH/bin
-        ls -lah /home/runner/work/containerd
-        ls -lah .
-        env
         echo $PWD
         go get -u github.com/vbatts/git-validation
         go get -u github.com/kunalkushwaha/ltag
@@ -72,6 +69,7 @@ jobs:
         GOPATH: /home/runner/work/containerd/go
       run: |
         echo $PWD
+        export PATH=$PATH:$GOPATH/bin
         DCO_VERBOSITY=-q ../project/script/validate/dco
         ../project/script/validate/fileheader ../project/
         ../project/script/validate/vendor
