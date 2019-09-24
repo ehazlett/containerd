@@ -46,6 +46,7 @@ jobs:
         GOPATH: /home/runner/work/containerd/go
       run: |
         go version
+        export PATH=$PATH:$GOPATH/bin
         ls -lah /home/runner/work/containerd
         ls -lah .
         env
