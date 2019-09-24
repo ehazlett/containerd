@@ -64,7 +64,7 @@ jobs:
         if [ "$GOOS" = "linux" ]; then sudo PATH=$PATH GOPATH=$GOPATH script/setup/install-critools; fi
         if [ "$GOOS" = "linux" ]; then wget https://github.com/checkpoint-restore/criu/archive/v3.12.tar.gz -O /tmp/criu.tar.gz ; fi
         if [ "$GOOS" = "linux" ]; then tar -C /tmp/ -zxf /tmp/criu.tar.gz ; fi
-        if [ "$GOOS" = "linux" ]; then cd /tmp/criu-3.12 && sudo make install-criu ; fi
+        if [ "$GOOS" = "linux" ]; then pushd /tmp/criu-3.12 && sudo make install-criu ; popd ; fi
         echo $PWD
         DCO_VERBOSITY=-q ../project/script/validate/dco
         ../project/script/validate/fileheader ../project/
