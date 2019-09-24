@@ -30,7 +30,6 @@ jobs:
     - name: Checkout (containerd/containerd)
       uses: actions/checkout@v1
       with:
-        fetch-depth: 10
         path: go/src/github.com/containerd/containerd
 
     - name: Checkout (containerd/project)
@@ -40,7 +39,7 @@ jobs:
         path: go/src/github.com/containerd/project
         ref: master
 
-    - name: Build
+    - name: Project Dependencies
       env:
         GOOS: linux
         GOPATH: /home/runner/work/containerd/go
@@ -66,6 +65,12 @@ jobs:
         if [ "$GOOS" = "linux" ]; then wget https://github.com/checkpoint-restore/criu/archive/v3.12.tar.gz -O /tmp/criu.tar.gz ; fi
         if [ "$GOOS" = "linux" ]; then tar -C /tmp/ -zxf /tmp/criu.tar.gz ; fi
         if [ "$GOOS" = "linux" ]; then pushd /tmp/criu-3.12 && sudo make install-criu ; popd ; fi
+
+    - name: Test
+      env:
+        GOOS: linux
+        GOPATH: /home/runner/work/containerd/go
+      run: |
         echo $PWD
         DCO_VERBOSITY=-q ../project/script/validate/dco
         ../project/script/validate/fileheader ../project/
