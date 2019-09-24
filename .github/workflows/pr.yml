@@ -41,10 +41,12 @@ jobs:
         ref: master
 
     - name: Build
+      runs-on: ubuntu-latest
       env:
         GOOS: linux
         GOPATH: /home/runner/work/containerd/go
       run: |
+        go version
         ls -lah /home/runner/work/containerd
         ls -lah .
         env
