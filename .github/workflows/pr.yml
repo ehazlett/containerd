@@ -30,6 +30,7 @@ jobs:
     - name: Checkout (containerd/containerd)
       uses: actions/checkout@v1
       with:
+        fetch-depth: 10
         path: go/src/github.com/containerd/containerd
 
     - name: Checkout (containerd/project)
