@@ -70,6 +70,7 @@ jobs:
       run: |
         echo $PWD
         export PATH=$PATH:$GOPATH/bin
+        git status
         DCO_VERBOSITY=-q ../project/script/validate/dco
         ../project/script/validate/fileheader ../project/
         ../project/script/validate/vendor
